@@ -23,6 +23,7 @@ public static class HostingExtensions
             services.AddSingleton<RememberEntryRepository>();
             services.AddSingleton<ConfigRepository>();
             services.AddSingleton<OAuthStateRepository>();
+            services.AddSingleton<OAuthAppConfigRepository>();
             services.AddSingleton<MinuteSampleRepository>();
             services.AddSingleton<IClock, SystemClock>();
             services.AddSingleton<IEventBus, EventBus>();

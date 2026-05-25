@@ -114,6 +114,14 @@ static async Task RunDaemon()
     catch (Exception ex)
     {
         Log.Fatal(ex, "TmTimeTracker crashed");
+        try
+        {
+            System.Windows.Forms.MessageBox.Show(
+                $"TmTimeTracker failed to start.\n\n{ex.GetType().Name}: {ex.Message}\n\nSee log at {AppPaths.LogsDir}",
+                "TmTimeTracker", System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
+        }
+        catch { /* if even MessageBox fails, give up quietly */ }
         throw;
     }
     finally
