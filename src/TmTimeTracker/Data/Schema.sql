@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS oauth_state (
     scope               TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS oauth_app_config (
+    id                  INTEGER PRIMARY KEY CHECK(id = 1),
+    client_id_dpapi     BLOB NOT NULL,
+    client_secret_dpapi BLOB NOT NULL,
+    redirect_uri        TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS config (
     id                          INTEGER PRIMARY KEY CHECK(id = 1),
     idle_threshold_seconds      INTEGER NOT NULL DEFAULT 600,
