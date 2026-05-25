@@ -72,12 +72,14 @@ static async Task RunDaemon()
             scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().EnsureCreated();
 
         TryMigrateSecretsJson(sp);
+        TryMigrateTrackedRepos(sp);
 
         var appConfig = sp.GetRequiredService<OAuthAppConfigRepository>().Load();
         var oauthState = sp.GetRequiredService<OAuthStateRepository>().Load();
         var cfg = sp.GetRequiredService<ConfigRepository>().TryGet();
+        var hasTrackedRepo = sp.GetRequiredService<TrackedRepoRepository>().GetAll().Count > 0;
 
-        var setupNeeded = appConfig is null || oauthState is null || cfg is null;
+        var setupNeeded = appConfig is null || oauthState is null || cfg is null || !hasTrackedRepo;
         var windows = sp.GetRequiredService<WindowsHost>();
         var gate = sp.GetRequiredService<PollServiceGate>();
 
@@ -128,6 +130,18 @@ static async Task RunDaemon()
     {
         Log.CloseAndFlush();
     }
+}
+
+static void TryMigrateTrackedRepos(IServiceProvider sp)
+{
+    var trackedRepo = sp.GetRequiredService<TrackedRepoRepository>();
+    if (trackedRepo.GetAll().Count > 0) return;
+
+    var cfg = sp.GetRequiredService<ConfigRepository>().TryGet();
+    if (cfg is null || string.IsNullOrWhiteSpace(cfg.RepoPath)) return;
+    if (!Directory.Exists(cfg.RepoPath)) return;
+
+    trackedRepo.Add(cfg.RepoPath);
 }
 
 static void TryMigrateSecretsJson(IServiceProvider sp)
