@@ -1,0 +1,28 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Publish output
+publish/
+*.exe
+*.dll
+*.pdb
+
+# Local state
+secrets.json
+*.db
+*.db-shm
+*.db-wal
+local.settings.json
+
+# IDE
+.idea/
+.vscode/
+
+# Test output
+TestResults/
+coverage.*
+*.trx
