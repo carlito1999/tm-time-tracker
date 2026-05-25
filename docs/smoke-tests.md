@@ -2,60 +2,109 @@
 
 For each item, check the box only after you observed the expected outcome.
 
-## Prerequisites (one-time)
+## Prerequisites (one-time, external)
 
-- [ ] Register an OAuth 2.0 (3LO) app at https://developer.atlassian.com/console/myapps/
-  - Name: `TmTimeTracker (lefteris-personal)`
-  - Callback URL: `http://localhost:53682/callback`
-  - Permissions → Jira API: `read:jira-work`, `write:jira-work`, `offline_access`
-- [ ] Copy Client ID and Secret into `secrets.json` at solution root
-  (mirror the shape of `secrets.example.json`)
+Atlassian still requires manual registration of the OAuth 2.0 (3LO) app —
+the wizard cannot create that for you. The app's Client ID + Secret are then
+entered into the setup wizard on first run (no `secrets.json` file needed).
 
-## 1. First-run consent
+- [ ] At <https://developer.atlassian.com/console/myapps/>, create an OAuth 2.0
+      (3LO) integration named e.g. `TmTimeTracker (personal)`.
+- [ ] Add callback URL: `http://localhost:53682/callback`.
+- [ ] Add Jira API permissions: `read:jira-work`, `write:jira-work`,
+      `offline_access`.
+- [ ] Note the Client ID and Secret for use in the setup wizard.
+
+## 1. First-run wizard
+
 - [ ] Delete `%LOCALAPPDATA%\TmTimeTracker\state.db` if it already exists.
-- [ ] Run `dotnet run --project src\TmTimeTracker -- --login`.
-- [ ] Browser opens Atlassian consent → approve → page shows "TmTimeTracker connected".
-- [ ] Console prints "Login complete. Tokens stored."
-- [ ] `state.db` now has a row in `oauth_state` (verify via
-  `sqlite3 %LOCALAPPDATA%\TmTimeTracker\state.db "SELECT cloud_id FROM oauth_state"`).
+- [ ] Launch the exe (double-click `TmTimeTracker.exe` on Desktop, or
+      `dotnet run --project src\TmTimeTracker`).
+- [ ] Within ~1 second, the tray icon appears AND the Setup window opens
+      on page 1 (OAuth app).
+- [ ] Paste Client ID + Client Secret → Next.
+- [ ] On page 2, click Sign in to Atlassian → browser opens → approve.
+- [ ] Browser shows "TmTimeTracker connected"; the wizard advances to "Connected!"
+- [ ] Click Next → keep default paths and timing → Finish.
+- [ ] Dashboard opens automatically.
+- [ ] `state.db` now has rows in `oauth_app_config`, `oauth_state`, and `config`
+      (verify via `sqlite3 %LOCALAPPDATA%\TmTimeTracker\state.db ".tables"`).
 
-## 2. Ticket probe
-- [ ] Run `dotnet run --project src\TmTimeTracker -- --probe-jira TM-29`.
-- [ ] Console prints e.g. `TM-29: Review (indeterminate)`.
+## 2. Dashboard reflects live state
 
-## 3. Live status transition (full daemon)
-- [ ] On a TM-XX branch in `c:\projects\training-manager`, ensure the ticket is
-      currently "In Progress" in Jira UI.
-- [ ] Launch `dotnet run --project src\TmTimeTracker` (no args → full daemon).
-- [ ] Tray icon appears. Right-click shows menu (Pending worklogs, Open log folder, Quit).
-- [ ] Work normally for ~5 minutes (verify by querying
-      `SELECT ticket_key, minutes_active FROM ticket_time WHERE submitted_at IS NULL`).
+- [ ] With daemon + dashboard open, switch git branches in the configured repo.
+- [ ] Within 10 seconds: Branch and Ticket labels at top update.
+- [ ] Recent events shows the BranchChanged event.
+
+## 3. Live status transition (full pipeline)
+
+- [ ] On a TM-XX branch, work normally for ~5 minutes (verify the pending
+      row's Minutes column increments).
 - [ ] Move the ticket "In Progress" → "Review" in Jira UI.
-- [ ] Within 90 seconds, the daemon pops an edit form with the proposed minutes
-      and a bullet list of `.remember/` entries.
+- [ ] Within 90 seconds, the daemon pops the edit form (same as before; the
+      dashboard doesn't suppress it).
 - [ ] Click Submit. Form closes.
-- [ ] Verify the worklog at `https://<your-site>.atlassian.net/browse/TM-XX?focusedWorklogId=<id>`.
-- [ ] `submitted_at` is now set on the corresponding `ticket_time` row.
+- [ ] Verify the worklog at
+      `https://<your-site>.atlassian.net/browse/TM-XX?focusedWorklogId=<id>`.
+- [ ] Row disappears from the dashboard's pending list.
 
-## 4. Lock/unlock
+## 4. Submit Now (dashboard manual submit)
+
+- [ ] In the dashboard, select a pending row with non-zero minutes.
+- [ ] Click "Submit now".
+- [ ] Verify the worklog appears in Jira within ~5 seconds.
+- [ ] Row disappears from the pending list.
+
+## 5. Discard (audit row stays)
+
+- [ ] Select a pending row → click Discard → confirm Yes.
+- [ ] Row disappears from pending.
+- [ ] No worklog appears in Jira.
+- [ ] Verify with `SELECT worklog_id FROM ticket_time ORDER BY id DESC LIMIT 1` —
+      the latest row has `worklog_id` starting with `discarded:`.
+
+## 6. Settings (tabbed mode)
+
+- [ ] Right-click tray → Settings…
+- [ ] Wizard opens; navigate to Paths page; change idle threshold to 5 min;
+      Finish.
+- [ ] Lock workstation; wait 6 minutes; unlock; verify minute samples in the
+      relevant window have `is_idle=1`.
+
+## 7. Lock/unlock
+
 - [ ] Lock the workstation (Win+L) while the daemon is running.
 - [ ] Wait 2 minutes.
 - [ ] Unlock.
 - [ ] Inspect `minute_sample` rows for the 2-minute window: `is_idle=1`.
 
-## 5. Sleep/resume
+## 8. Sleep/resume
+
 - [ ] Put laptop to sleep for 10+ minutes.
 - [ ] Wake.
-- [ ] No spurious minute-tick increments during sleep window (`ticket_time.minutes_active`
-      did not jump by 10).
+- [ ] No spurious minute-tick increments during sleep window
+      (`ticket_time.minutes_active` did not jump by 10).
 
-## 6. Crash recovery
+## 9. Crash recovery
+
 - [ ] Kill the daemon process mid-day (Task Manager → End task).
-- [ ] Restart `dotnet run --project src\TmTimeTracker`.
-- [ ] Open `ticket_time` rows still present and submittable; no duplicate cycles.
+- [ ] Restart the exe.
+- [ ] Open `ticket_time` rows still present and submittable; no duplicate
+      cycles created.
 
-## 7. Single-instance + auto-start
-- [ ] With the daemon running, launch a second instance — the second should exit silently.
-- [ ] Verify auto-start: `reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v TmTimeTracker`
+## 10. Single-instance + auto-start
+
+- [ ] With the daemon running, launch a second instance — the second exits
+      silently.
+- [ ] Verify auto-start:
+      `reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v TmTimeTracker`
       → returns the exe path.
 - [ ] Log out and back in — tray icon should reappear.
+
+## 11. Migration from secrets.json (only if upgrading)
+
+- [ ] With existing `secrets.json` present beside the exe and the new build
+      installed for the first time, launch the daemon.
+- [ ] On startup, `secrets.json` is renamed to `secrets.json.migrated`.
+- [ ] Setup wizard opens at page 2 (Connect) because Client ID/Secret are
+      already populated. Complete sign-in. Done.
