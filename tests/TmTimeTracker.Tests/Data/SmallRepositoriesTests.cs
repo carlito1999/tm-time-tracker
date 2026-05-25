@@ -40,6 +40,35 @@ public class SmallRepositoriesTests
     }
 
     [Fact]
+    public void Config_Update_overwrites_all_fields()
+    {
+        var repo = new ConfigRepository(Setup());
+        repo.SetIfMissing(new AppConfig(600, 90, "a", "b", "ip", "rev"));
+        repo.Update(new AppConfig(900, 30, "x", "y", "z", "w"));
+        var loaded = repo.Get();
+        loaded.IdleThresholdSeconds.Should().Be(900);
+        loaded.JiraPollIntervalSeconds.Should().Be(30);
+        loaded.RepoPath.Should().Be("x");
+        loaded.RememberPath.Should().Be("y");
+        loaded.InProgressStatusName.Should().Be("z");
+        loaded.TransitionToStatusName.Should().Be("w");
+    }
+
+    [Fact]
+    public void Config_Update_creates_row_if_absent()
+    {
+        var repo = new ConfigRepository(Setup());
+        repo.Update(new AppConfig(1, 2, "p", "q", "r", "s"));
+        repo.Get().RepoPath.Should().Be("p");
+    }
+
+    [Fact]
+    public void Config_TryGet_returns_null_when_absent()
+    {
+        new ConfigRepository(Setup()).TryGet().Should().BeNull();
+    }
+
+    [Fact]
     public void OAuthState_round_trip()
     {
         var repo = new OAuthStateRepository(Setup());

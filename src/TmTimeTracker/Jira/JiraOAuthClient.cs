@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using System.Text;
-using TmTimeTracker.Configuration;
 
 namespace TmTimeTracker.Jira;
 
@@ -11,22 +10,24 @@ public sealed class JiraOAuthClient
     private const string TokenPath = "/oauth/token";
 
     private readonly HttpClient _http;
-    private readonly AtlassianSecrets _secrets;
+    private readonly IOAuthAppConfigSource _source;
     private readonly string _oauthBase;
 
-    public JiraOAuthClient(HttpClient http, AtlassianSecrets secrets, string? oauthBaseOverride = null)
+    public JiraOAuthClient(HttpClient http, IOAuthAppConfigSource source, string? oauthBaseOverride = null)
     {
-        _http = http; _secrets = secrets;
+        _http = http;
+        _source = source;
         _oauthBase = (oauthBaseOverride ?? DefaultOAuthBase).TrimEnd('/');
     }
 
     public string BuildAuthorizationUrl(string state)
     {
+        var c = _source.Get();
         var qs = new StringBuilder()
             .Append("audience=api.atlassian.com")
-            .Append("&client_id=").Append(Uri.EscapeDataString(_secrets.OAuthClientId))
+            .Append("&client_id=").Append(Uri.EscapeDataString(c.ClientId))
             .Append("&scope=").Append(Uri.EscapeDataString("read:jira-work write:jira-work offline_access"))
-            .Append("&redirect_uri=").Append(Uri.EscapeDataString(_secrets.RedirectUri))
+            .Append("&redirect_uri=").Append(Uri.EscapeDataString(c.RedirectUri))
             .Append("&state=").Append(Uri.EscapeDataString(state))
             .Append("&response_type=code&prompt=consent");
         return $"{_oauthBase}{AuthorizePath}?{qs}";
@@ -34,13 +35,14 @@ public sealed class JiraOAuthClient
 
     public async Task<TokenResponse> ExchangeCodeAsync(string code, CancellationToken ct)
     {
+        var c = _source.Get();
         var payload = new
         {
             grant_type = "authorization_code",
-            client_id = _secrets.OAuthClientId,
-            client_secret = _secrets.OAuthClientSecret,
+            client_id = c.ClientId,
+            client_secret = c.ClientSecret,
             code,
-            redirect_uri = _secrets.RedirectUri
+            redirect_uri = c.RedirectUri
         };
         var resp = await _http.PostAsJsonAsync($"{_oauthBase}{TokenPath}", payload, ct)
                               .ConfigureAwait(false);
@@ -51,11 +53,12 @@ public sealed class JiraOAuthClient
 
     public async Task<TokenResponse> RefreshAsync(string refreshToken, CancellationToken ct)
     {
+        var c = _source.Get();
         var payload = new
         {
             grant_type = "refresh_token",
-            client_id = _secrets.OAuthClientId,
-            client_secret = _secrets.OAuthClientSecret,
+            client_id = c.ClientId,
+            client_secret = c.ClientSecret,
             refresh_token = refreshToken
         };
         var resp = await _http.PostAsJsonAsync($"{_oauthBase}{TokenPath}", payload, ct)

@@ -57,11 +57,12 @@ public static class HostingExtensions
         {
             services.AddHttpClient();
             services.AddSingleton<ITokenProtector, DpapiTokenProtector>();
+            services.AddSingleton<IOAuthAppConfigSource, RepositoryOAuthAppConfigSource>();
             services.AddSingleton(sp =>
             {
                 var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("jira-oauth");
-                var secrets = sp.GetRequiredService<AppSecrets>();
-                return new JiraOAuthClient(http, secrets.Atlassian);
+                var src = sp.GetRequiredService<IOAuthAppConfigSource>();
+                return new JiraOAuthClient(http, src);
             });
             services.AddSingleton(sp => new OAuthCoordinator(
                 sp.GetRequiredService<OAuthStateRepository>(),

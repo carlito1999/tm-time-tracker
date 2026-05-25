@@ -1,5 +1,6 @@
 using FluentAssertions;
-using TmTimeTracker.Configuration;
+using Moq;
+using TmTimeTracker.Data;
 using TmTimeTracker.Jira;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -19,14 +20,20 @@ public class JiraOAuthClientTests : IDisposable
 
     public void Dispose() => _server.Dispose();
 
+    private static IOAuthAppConfigSource StubSource()
+    {
+        var m = new Mock<IOAuthAppConfigSource>();
+        m.Setup(s => s.Get()).Returns(new OAuthAppConfig(
+            ClientId: "client-id",
+            ClientSecret: "client-secret",
+            RedirectUri: "http://localhost:53682/callback"));
+        m.SetupGet(s => s.IsConfigured).Returns(true);
+        return m.Object;
+    }
+
     private JiraOAuthClient NewClient() => new(
         new HttpClient { BaseAddress = new Uri(_server.Url!) },
-        new AtlassianSecrets
-        {
-            OAuthClientId = "client-id",
-            OAuthClientSecret = "client-secret",
-            RedirectUri = "http://localhost:53682/callback"
-        },
+        StubSource(),
         oauthBaseOverride: _server.Url!);
 
     [Fact]
