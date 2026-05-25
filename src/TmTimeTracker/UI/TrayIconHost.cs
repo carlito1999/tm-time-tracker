@@ -121,7 +121,7 @@ public sealed class TrayIconHost : BackgroundService
 
         try
         {
-            var req = BuildAdfRequest(form.SubmittedMinutes, form.Description, clock.LocalNow);
+            var req = WorklogRequestFactory.Build(form.SubmittedMinutes, form.Description, clock.LocalNow);
             var resp = api.PostWorklogAsync(ticketKey, req, CancellationToken.None)
                           .GetAwaiter().GetResult();
             tickets.MarkSubmitted(cycle.Id, resp.Id, form.SubmittedMinutes, clock.UtcNow);
@@ -134,16 +134,5 @@ public sealed class TrayIconHost : BackgroundService
             MessageBox.Show($"Submit failed: {ex.Message}", "TmTimeTracker",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-    }
-
-    private static WorklogRequest BuildAdfRequest(int minutes, string description, DateTimeOffset localNow)
-    {
-        var content = new WorklogContent("paragraph",
-            new[] { new WorklogTextNode("text", description) });
-        var comment = new WorklogComment("doc", 1, new[] { content });
-        var offset = localNow.Offset;
-        var sign = offset.Ticks >= 0 ? "+" : "-";
-        var started = $"{localNow:yyyy-MM-ddTHH:mm:ss.fff}{sign}{Math.Abs(offset.Hours):D2}{Math.Abs(offset.Minutes):D2}";
-        return new WorklogRequest(TimeSpentSeconds: minutes * 60, StartedIso: started, Comment: comment);
     }
 }

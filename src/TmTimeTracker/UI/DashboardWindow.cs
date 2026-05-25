@@ -217,7 +217,84 @@ public sealed class DashboardWindow : Form
     private string? CurrentTicket() =>
         _pending.SelectedRows.Count == 0 ? null : _pending.SelectedRows[0].Cells["ticket"].Value as string;
 
-    private void OnSubmitNow() { /* Phase 5 */ }
-    private void OnEditSubmit() { /* Phase 5 */ }
-    private void OnDiscard() { /* Phase 5 */ }
+    private void OnSubmitNow()
+    {
+        var key = CurrentTicket();
+        if (key is null) return;
+        try { SubmitObserved(key); }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void OnEditSubmit()
+    {
+        var key = CurrentTicket();
+        if (key is null) return;
+
+        using var scope = _sp.CreateScope();
+        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
+        var entries = scope.ServiceProvider.GetRequiredService<RememberEntryRepository>();
+        var cycle = tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == key);
+        if (cycle is null) return;
+        var unconsumed = entries.GetUnconsumedForTicket(key);
+        var description = WorklogDescriptionBuilder.Build(unconsumed);
+        using var form = new WorklogEditForm(key, cycle.MinutesActive, description);
+        if (form.ShowDialog(this) != DialogResult.OK) return;
+        try { Submit(cycle, form.SubmittedMinutes, form.Description, unconsumed); }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void OnDiscard()
+    {
+        var key = CurrentTicket();
+        if (key is null) return;
+        using var scope = _sp.CreateScope();
+        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
+        var cycle = tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == key);
+        if (cycle is null) return;
+
+        var confirm = MessageBox.Show(this,
+            $"Discard {cycle.MinutesActive} minute(s) on {key}? This cannot be undone.",
+            "TmTimeTracker", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+        tickets.MarkSubmitted(cycle.Id, "discarded:" + Guid.NewGuid().ToString("N"), 0, clock.UtcNow);
+        RefreshFromDb();
+    }
+
+    private void SubmitObserved(string ticketKey)
+    {
+        using var scope = _sp.CreateScope();
+        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
+        var entries = scope.ServiceProvider.GetRequiredService<RememberEntryRepository>();
+        var cycle = tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == ticketKey);
+        if (cycle is null) return;
+        var unconsumed = entries.GetUnconsumedForTicket(ticketKey);
+        var description = WorklogDescriptionBuilder.Build(unconsumed);
+        Submit(cycle, cycle.MinutesActive, description, unconsumed);
+    }
+
+    private void Submit(TicketCycle cycle, int minutes, string description,
+                        IReadOnlyList<StoredRememberEntry> unconsumed)
+    {
+        using var scope = _sp.CreateScope();
+        var api = scope.ServiceProvider.GetRequiredService<TmTimeTracker.Jira.JiraApiClient>();
+        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
+        var entriesRepo = scope.ServiceProvider.GetRequiredService<RememberEntryRepository>();
+        var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+
+        var req = WorklogRequestFactory.Build(minutes, description, clock.LocalNow);
+        var resp = api.PostWorklogAsync(cycle.TicketKey, req, CancellationToken.None).GetAwaiter().GetResult();
+        tickets.MarkSubmitted(cycle.Id, resp.Id, minutes, clock.UtcNow);
+        entriesRepo.TagConsumed(unconsumed.Select(e => e.Id).ToList(), cycle.Id);
+        _log.LogInformation("Worklog {Id} posted to {Ticket} ({Minutes}m)", resp.Id, cycle.TicketKey, minutes);
+        RefreshFromDb();
+    }
+
+    private void ShowError(Exception ex)
+    {
+        _log.LogError(ex, "Submit action failed");
+        MessageBox.Show(this, $"Failed: {ex.Message}", "TmTimeTracker",
+            MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
 }
