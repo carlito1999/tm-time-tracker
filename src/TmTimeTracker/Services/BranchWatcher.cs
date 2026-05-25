@@ -1,43 +1,54 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using TmTimeTracker.Data;
-using TmTimeTracker.Logic;
-using TmTimeTracker.Platform;
 
 namespace TmTimeTracker.Services;
 
 public sealed class BranchWatcher : BackgroundService
 {
-    private readonly IGitBranchProbe _probe;
+    private readonly ActiveRepoResolver _resolver;
     private readonly IEventBus _bus;
     private readonly IClock _clock;
-    private readonly ConfigRepository _config;
     private readonly ILogger<BranchWatcher> _log;
-    private readonly TimeSpan _sampleInterval = TimeSpan.FromSeconds(10);
+    private readonly TimeSpan _interval = TimeSpan.FromSeconds(2);
 
-    public BranchWatcher(IGitBranchProbe probe, IEventBus bus, IClock clock,
-        ConfigRepository config, ILogger<BranchWatcher> log)
+    private string? _lastRepoPath;
+    private string? _lastBranch;
+    private string? _lastTicket;
+
+    public BranchWatcher(ActiveRepoResolver resolver, IEventBus bus, IClock clock,
+        ILogger<BranchWatcher> log)
     {
-        _probe = probe; _bus = bus; _clock = clock; _config = config; _log = log;
+        _resolver = resolver; _bus = bus; _clock = clock; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        string? lastBranch = null;
-        var repoPath = _config.Get().RepoPath;
-
-        while (!stoppingToken.IsCancellationRequested)
+        using var timer = new PeriodicTimer(_interval);
+        do
         {
-            var branch = _probe.GetCurrentBranch(repoPath);
-            if (branch != lastBranch)
+            try
             {
-                var ticket = branch is null ? null : TicketKeyExtractor.Extract(branch);
-                await _bus.PublishAsync(new BranchChanged(branch, ticket, _clock.UtcNow), stoppingToken)
-                    .ConfigureAwait(false);
-                _log.LogInformation("Branch -> {Branch} (ticket={Ticket})", branch, ticket);
-                lastBranch = branch;
+                var resolution = _resolver.Resolve();
+                var repoPath = resolution?.RepoPath;
+                var branch = resolution?.Branch;
+                var ticket = resolution?.TicketKey;
+
+                if (repoPath != _lastRepoPath || branch != _lastBranch || ticket != _lastTicket)
+                {
+                    _lastRepoPath = repoPath;
+                    _lastBranch = branch;
+                    _lastTicket = ticket;
+                    await _bus.PublishAsync(new BranchChanged(branch, ticket, _clock.UtcNow), stoppingToken)
+                              .ConfigureAwait(false);
+                    _log.LogInformation("Active repo -> {Repo} branch={Branch} ticket={Ticket}",
+                        repoPath, branch, ticket);
+                }
             }
-            await Task.Delay(_sampleInterval, stoppingToken).ConfigureAwait(false);
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "BranchWatcher tick failed");
+            }
         }
+        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
     }
 }

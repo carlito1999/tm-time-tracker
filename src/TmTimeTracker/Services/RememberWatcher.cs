@@ -9,44 +9,75 @@ public sealed class RememberWatcher : BackgroundService
 {
     private readonly IEventBus _bus;
     private readonly IClock _clock;
-    private readonly ConfigRepository _config;
+    private readonly TrackedRepoRepository _repos;
     private readonly RememberEntryRepository _entries;
     private readonly ILogger<RememberWatcher> _log;
-    private FileSystemWatcher? _fsw;
+    private readonly TimeSpan _refreshInterval = TimeSpan.FromSeconds(30);
+    private readonly Dictionary<string, FileSystemWatcher> _watchers =
+        new(StringComparer.OrdinalIgnoreCase);
 
-    public RememberWatcher(IEventBus bus, IClock clock, ConfigRepository config,
+    public RememberWatcher(IEventBus bus, IClock clock, TrackedRepoRepository repos,
         RememberEntryRepository entries, ILogger<RememberWatcher> log)
     {
-        _bus = bus; _clock = clock; _config = config; _entries = entries; _log = log;
+        _bus = bus; _clock = clock; _repos = repos; _entries = entries; _log = log;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var path = _config.Get().RememberPath;
-        if (!Directory.Exists(path))
+        RefreshWatchers();
+        using var timer = new PeriodicTimer(_refreshInterval);
+        try
         {
-            _log.LogWarning("Remember path {Path} not found; watcher disabled", path);
-            return Task.CompletedTask;
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+                RefreshWatchers();
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            foreach (var w in _watchers.Values) { try { w.Dispose(); } catch { } }
+            _watchers.Clear();
+        }
+    }
+
+    private void RefreshWatchers()
+    {
+        var wanted = _repos.GetAll()
+            .Select(r => Path.Combine(r.Path, ".remember"))
+            .Where(Directory.Exists)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in wanted)
+        {
+            if (_watchers.ContainsKey(path)) continue;
+            try
+            {
+                var fsw = new FileSystemWatcher(path)
+                {
+                    Filter = "*.md",
+                    EnableRaisingEvents = true,
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName
+                };
+                fsw.Changed += (_, e) => SafeScanFile(e.FullPath);
+                fsw.Created += (_, e) => SafeScanFile(e.FullPath);
+                _watchers[path] = fsw;
+                ScanAll(path);
+                _log.LogInformation("Watching {Path}", path);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Could not watch {Path}", path);
+            }
         }
 
-        ScanAll(path);
-
-        _fsw = new FileSystemWatcher(path)
+        foreach (var existing in _watchers.Keys.ToList())
         {
-            Filter = "*.md",
-            EnableRaisingEvents = true,
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName
-        };
-        _fsw.Changed += (_, e) => SafeScanFile(e.FullPath);
-        _fsw.Created += (_, e) => SafeScanFile(e.FullPath);
-
-        stoppingToken.Register(() =>
-        {
-            _fsw.EnableRaisingEvents = false;
-            _fsw.Dispose();
-        });
-
-        return Task.Delay(Timeout.Infinite, stoppingToken);
+            if (!wanted.Contains(existing))
+            {
+                try { _watchers[existing].Dispose(); } catch { }
+                _watchers.Remove(existing);
+                _log.LogInformation("Stopped watching {Path}", existing);
+            }
+        }
     }
 
     private void ScanAll(string dir)
@@ -64,14 +95,8 @@ public sealed class RememberWatcher : BackgroundService
                   name.Equals("now.md", StringComparison.OrdinalIgnoreCase))) return;
 
             string content;
-            try
-            {
-                content = File.ReadAllText(fullPath);
-            }
-            catch (IOException)
-            {
-                return;
-            }
+            try { content = File.ReadAllText(fullPath); }
+            catch (IOException) { return; }
 
             var entryDate = ExtractDateFromFilename(name) ?? DateTime.UtcNow.ToString("yyyy-MM-dd");
             var entries = RememberEntryParser.Parse(content, name);
