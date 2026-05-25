@@ -47,7 +47,17 @@ public static class HostingExtensions
 
     public static IHostBuilder AddTrayUI(this IHostBuilder builder)
     {
-        builder.ConfigureServices(services => services.AddHostedService<TmTimeTracker.UI.TrayIconHost>());
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<TmTimeTracker.UI.WindowsHost>();
+            services.AddHostedService<TmTimeTracker.UI.TrayIconHost>();
+        });
+        return builder;
+    }
+
+    public static IHostBuilder AddPollGate(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services => services.AddSingleton<PollServiceGate>());
         return builder;
     }
 

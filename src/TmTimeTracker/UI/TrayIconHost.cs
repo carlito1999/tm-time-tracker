@@ -34,6 +34,8 @@ public sealed class TrayIconHost : BackgroundService
             _uiCtx = new WindowsFormsSynchronizationContext();
             SynchronizationContext.SetSynchronizationContext(_uiCtx);
 
+            _sp.GetRequiredService<WindowsHost>().RegisterUiContext(_uiCtx);
+
             _icon = BuildIcon();
             ready.Set();
             Application.ApplicationExit += (_, _) => _icon.Dispose();
@@ -65,41 +67,22 @@ public sealed class TrayIconHost : BackgroundService
 
     private NotifyIcon BuildIcon()
     {
+        var host = _sp.GetRequiredService<WindowsHost>();
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Pending worklogs...", null, (_, _) => ShowPending());
+        menu.Items.Add("Open dashboard…", null, (_, _) => host.ShowDashboard());
+        menu.Items.Add("Settings…", null, (_, _) => host.ShowSetup());
         menu.Items.Add("Open log folder", null, (_, _) =>
             System.Diagnostics.Process.Start("explorer.exe", Configuration.AppPaths.LogsDir));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => _lifetime.StopApplication());
 
-        var icon = new NotifyIcon
+        return new NotifyIcon
         {
             Visible = true,
             Text = "TmTimeTracker",
             Icon = SystemIcons.Application,
             ContextMenuStrip = menu
         };
-        return icon;
-    }
-
-    private void ShowPending()
-    {
-        using var scope = _sp.CreateScope();
-        var repo = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
-        var rows = repo.GetAllOpen();
-        if (rows.Count == 0)
-        {
-            MessageBox.Show("No pending worklogs.", "TmTimeTracker");
-            return;
-        }
-        var menu = new ContextMenuStrip();
-        foreach (var r in rows)
-        {
-            var key = r.TicketKey;
-            menu.Items.Add($"{key} - {r.MinutesActive} min", null,
-                (_, _) => PromptForWorklog(key));
-        }
-        menu.Show(Cursor.Position);
     }
 
     private void PromptForWorklog(string ticketKey)

@@ -13,18 +13,25 @@ public sealed class JiraPollService : BackgroundService
     private readonly IEventBus _bus;
     private readonly IClock _clock;
     private readonly ILogger<JiraPollService> _log;
+    private readonly PollServiceGate _gate;
 
     public JiraPollService(TicketTimeRepository tickets, JiraApiClient api,
-        ConfigRepository config, IEventBus bus, IClock clock, ILogger<JiraPollService> log)
+        ConfigRepository config, IEventBus bus, IClock clock, ILogger<JiraPollService> log,
+        PollServiceGate gate)
     {
         _tickets = tickets; _api = api; _config = config;
-        _bus = bus; _clock = clock; _log = log;
+        _bus = bus; _clock = clock; _log = log; _gate = gate;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var interval = TimeSpan.FromSeconds(_config.Get().JiraPollIntervalSeconds);
-        var transitionTo = _config.Get().TransitionToStatusName;
+        while (!_gate.Enabled && !stoppingToken.IsCancellationRequested)
+            await Task.Delay(500, stoppingToken).ConfigureAwait(false);
+        if (stoppingToken.IsCancellationRequested) return;
+
+        var cfg = _config.Get();
+        var interval = TimeSpan.FromSeconds(cfg.JiraPollIntervalSeconds);
+        var transitionTo = cfg.TransitionToStatusName;
 
         using var timer = new PeriodicTimer(interval);
         do

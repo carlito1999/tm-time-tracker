@@ -9,15 +9,17 @@ using TmTimeTracker.Data;
 using TmTimeTracker.Jira;
 using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
+using TmTimeTracker.UI;
 
 AppPaths.EnsureExists();
 
-if (args.Length >= 1 && args[0] == "--login")    { await RunCli(b => b, RunLogin); return; }
-if (args.Length == 2 && args[0] == "--probe-jira") { await RunCli(b => b, h => RunProbe(h, args[1])); return; }
+if (args.Length >= 1 && args[0] == "--login")     { await RunCli(b => b, RunLogin); return; }
+if (args.Length == 2 && args[0] == "--probe-jira"){ await RunCli(b => b, h => RunProbe(h, args[1])); return; }
 if (args.Length == 1 && args[0] == "--smoke-activity")
     { await RunCli(b => b.AddActivityServices(), RunStreaming); return; }
 if (args.Length == 1 && args[0] == "--smoke-poll")
-    { await RunCli(b => b.AddActivityServices().AddPollServices(), RunStreaming); return; }
+    { await RunCli(b => b.AddActivityServices().AddPollGate().AddPollServices(),
+                   h => { h.Services.GetRequiredService<PollServiceGate>().Enabled = true; return RunStreaming(h); }); return; }
 
 await RunDaemon();
 
@@ -60,19 +62,53 @@ static async Task RunDaemon()
         var host = BaseBuilder()
             .UseSerilog()
             .AddActivityServices()
+            .AddPollGate()
             .AddPollServices()
             .AddTrayUI()
             .Build();
 
-        using (var scope = host.Services.CreateScope())
-        {
+        var sp = host.Services;
+        using (var scope = sp.CreateScope())
             scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().EnsureCreated();
-            SeedConfigIfMissing(host);
+
+        TryMigrateSecretsJson(sp);
+
+        var appConfig = sp.GetRequiredService<OAuthAppConfigRepository>().Load();
+        var oauthState = sp.GetRequiredService<OAuthStateRepository>().Load();
+        var cfg = sp.GetRequiredService<ConfigRepository>().TryGet();
+
+        var setupNeeded = appConfig is null || oauthState is null || cfg is null;
+        var windows = sp.GetRequiredService<WindowsHost>();
+        var gate = sp.GetRequiredService<PollServiceGate>();
+
+        windows.SetupCompleted += () =>
+        {
+            gate.Enabled = true;
+            windows.ShowDashboard();
+            var path = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(path)) AutoStartRegistrar.Register(path);
+        };
+
+        if (setupNeeded)
+        {
+            var startPage = appConfig is null
+                ? SetupWindow.Page.OAuthApp
+                : oauthState is null
+                    ? SetupWindow.Page.Connect
+                    : SetupWindow.Page.Paths;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(800);
+                windows.ShowSetup(startPage);
+            });
+        }
+        else
+        {
+            gate.Enabled = true;
+            var path = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(path)) AutoStartRegistrar.Register(path);
         }
 
-        var exePath = Environment.ProcessPath;
-        if (!string.IsNullOrEmpty(exePath))
-            AutoStartRegistrar.Register(exePath);
         await host.RunAsync();
     }
     catch (Exception ex)
@@ -86,6 +122,29 @@ static async Task RunDaemon()
     }
 }
 
+static void TryMigrateSecretsJson(IServiceProvider sp)
+{
+    var repo = sp.GetRequiredService<OAuthAppConfigRepository>();
+    if (repo.Load() is not null) return;
+    const string path = "secrets.json";
+    if (!File.Exists(path)) return;
+    try
+    {
+        using var stream = File.OpenRead(path);
+        var doc = System.Text.Json.JsonDocument.Parse(stream);
+        var atl = doc.RootElement.GetProperty("Atlassian");
+        var id = atl.GetProperty("OAuthClientId").GetString() ?? "";
+        var secret = atl.GetProperty("OAuthClientSecret").GetString() ?? "";
+        var redirect = atl.TryGetProperty("RedirectUri", out var r)
+            ? r.GetString() ?? "http://localhost:53682/callback"
+            : "http://localhost:53682/callback";
+        if (id == "REPLACE_ME" || string.IsNullOrEmpty(id)) return;
+        repo.Save(new OAuthAppConfig(id, secret, redirect));
+        try { File.Move(path, "secrets.json.migrated", overwrite: true); } catch { /* best-effort */ }
+    }
+    catch { /* migration is best-effort; ignore */ }
+}
+
 static void SeedConfigIfMissing(IHost host)
 {
     using var scope = host.Services.CreateScope();
@@ -93,8 +152,8 @@ static void SeedConfigIfMissing(IHost host)
     cfg.SetIfMissing(new AppConfig(
         IdleThresholdSeconds: 600,
         JiraPollIntervalSeconds: 90,
-        RepoPath: @"c:\projects\training-manager",
-        RememberPath: @"c:\projects\training-manager\.remember",
+        RepoPath: Environment.CurrentDirectory,
+        RememberPath: Path.Combine(Environment.CurrentDirectory, ".remember"),
         InProgressStatusName: "In Progress",
         TransitionToStatusName: "Review"));
 }
@@ -104,7 +163,7 @@ static async Task RunLogin(IHost host)
     var coord = host.Services.GetRequiredService<OAuthCoordinator>();
     var oauth = host.Services.GetRequiredService<JiraOAuthClient>();
     var listener = host.Services.GetRequiredService<LocalCallbackListener>();
-    var secrets = host.Services.GetRequiredService<AppSecrets>();
+    var src = host.Services.GetRequiredService<IOAuthAppConfigSource>();
 
     var state = Guid.NewGuid().ToString("N");
     var url = oauth.BuildAuthorizationUrl(state);
@@ -116,7 +175,7 @@ static async Task RunLogin(IHost host)
         UseShellExecute = true
     });
 
-    var redirect = new Uri(secrets.Atlassian.RedirectUri);
+    var redirect = new Uri(src.Get().RedirectUri);
     var listenerPrefix = $"{redirect.Scheme}://{redirect.Authority}/";
     using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
     var cb = await listener.ListenOnceAsync(listenerPrefix, cts.Token);
