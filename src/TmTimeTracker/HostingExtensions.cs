@@ -40,7 +40,14 @@ public static class HostingExtensions
             services.AddHostedService<BranchWatcher>();
             services.AddHostedService<RememberWatcher>();
             services.AddHostedService<TimeAggregator>();
+            services.AddHostedService<MaintenanceService>();
         });
+        return builder;
+    }
+
+    public static IHostBuilder AddTrayUI(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services => services.AddHostedService<TmTimeTracker.UI.TrayIconHost>());
         return builder;
     }
 

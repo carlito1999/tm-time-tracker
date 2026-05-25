@@ -2,61 +2,86 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Serilog;
 using TmTimeTracker;
 using TmTimeTracker.Configuration;
 using TmTimeTracker.Data;
 using TmTimeTracker.Jira;
+using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
 
-var baseBuilder = Host.CreateDefaultBuilder(args)
-    .ConfigureAppConfiguration(c => c.AddJsonFile("secrets.json", optional: true, reloadOnChange: false))
-    .ConfigureServices((ctx, services) =>
-    {
-        var secrets = ctx.Configuration.Get<AppSecrets>() ?? new AppSecrets();
-        services.AddSingleton(secrets);
-    })
-    .ConfigureLogging(b => b.ClearProviders().AddSimpleConsole())
-    .AddTmTimeTrackerCore()
-    .AddJiraServices();
+AppPaths.EnsureExists();
 
-if (args.Length >= 1 && args[0] == "--login")
-{
-    var host = baseBuilder.Build();
-    InitDb(host);
-    await RunLogin(host);
-    return;
-}
-
-if (args.Length == 2 && args[0] == "--probe-jira")
-{
-    var host = baseBuilder.Build();
-    InitDb(host);
-    await RunProbe(host, args[1]);
-    return;
-}
-
+if (args.Length >= 1 && args[0] == "--login")    { await RunCli(b => b, RunLogin); return; }
+if (args.Length == 2 && args[0] == "--probe-jira") { await RunCli(b => b, h => RunProbe(h, args[1])); return; }
 if (args.Length == 1 && args[0] == "--smoke-activity")
-{
-    var host = baseBuilder.AddActivityServices().Build();
-    InitDb(host); SeedConfigIfMissing(host);
-    await RunStreaming(host);
-    return;
-}
-
+    { await RunCli(b => b.AddActivityServices(), RunStreaming); return; }
 if (args.Length == 1 && args[0] == "--smoke-poll")
-{
-    var host = baseBuilder.AddActivityServices().AddPollServices().Build();
-    InitDb(host); SeedConfigIfMissing(host);
-    await RunStreaming(host);
-    return;
-}
+    { await RunCli(b => b.AddActivityServices().AddPollServices(), RunStreaming); return; }
 
-Console.WriteLine("Usage: --login | --probe-jira TM-NN | --smoke-activity | --smoke-poll");
+await RunDaemon();
 
-static void InitDb(IHost host)
+static IHostBuilder BaseBuilder() =>
+    Host.CreateDefaultBuilder()
+        .ConfigureAppConfiguration(c => c.AddJsonFile("secrets.json", optional: true, reloadOnChange: false))
+        .ConfigureServices((ctx, services) =>
+        {
+            var secrets = ctx.Configuration.Get<AppSecrets>() ?? new AppSecrets();
+            services.AddSingleton(secrets);
+        })
+        .ConfigureLogging(b => b.ClearProviders().AddSimpleConsole())
+        .AddTmTimeTrackerCore()
+        .AddJiraServices();
+
+static async Task RunCli(Func<IHostBuilder, IHostBuilder> compose, Func<IHost, Task> body)
 {
+    var host = compose(BaseBuilder()).Build();
     using var scope = host.Services.CreateScope();
     scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().EnsureCreated();
+    SeedConfigIfMissing(host);
+    await body(host);
+}
+
+static async Task RunDaemon()
+{
+    using var guard = new SingleInstanceGuard();
+    if (!guard.IsPrimary) return;
+
+    Log.Logger = new LoggerConfiguration()
+        .MinimumLevel.Information()
+        .WriteTo.File(
+            Path.Combine(AppPaths.LogsDir, "daemon-.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 30)
+        .CreateLogger();
+
+    try
+    {
+        var host = BaseBuilder()
+            .UseSerilog()
+            .AddActivityServices()
+            .AddPollServices()
+            .AddTrayUI()
+            .Build();
+
+        using (var scope = host.Services.CreateScope())
+        {
+            scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().EnsureCreated();
+            SeedConfigIfMissing(host);
+        }
+
+        AutoStartRegistrar.Register(Environment.ProcessPath ?? System.Reflection.Assembly.GetExecutingAssembly().Location);
+        await host.RunAsync();
+    }
+    catch (Exception ex)
+    {
+        Log.Fatal(ex, "TmTimeTracker crashed");
+        throw;
+    }
+    finally
+    {
+        Log.CloseAndFlush();
+    }
 }
 
 static void SeedConfigIfMissing(IHost host)
@@ -66,8 +91,8 @@ static void SeedConfigIfMissing(IHost host)
     cfg.SetIfMissing(new AppConfig(
         IdleThresholdSeconds: 600,
         JiraPollIntervalSeconds: 90,
-        RepoPath: Environment.CurrentDirectory,
-        RememberPath: Path.Combine(Environment.CurrentDirectory, ".remember"),
+        RepoPath: @"c:\projects\training-manager",
+        RememberPath: @"c:\projects\training-manager\.remember",
         InProgressStatusName: "In Progress",
         TransitionToStatusName: "Review"));
 }
