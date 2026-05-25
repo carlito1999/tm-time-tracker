@@ -30,6 +30,7 @@ public static class HostingExtensions
             services.AddSingleton<IEventBus, EventBus>();
             services.AddSingleton<IIdleProbe, Win32IdleProbe>();
             services.AddSingleton<IGitBranchProbe, GitBranchProbe>();
+            services.AddSingleton<IForegroundWindowProbe, Win32ForegroundWindowProbe>();
         });
         return builder;
     }
