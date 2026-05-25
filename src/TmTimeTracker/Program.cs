@@ -70,7 +70,9 @@ static async Task RunDaemon()
             SeedConfigIfMissing(host);
         }
 
-        AutoStartRegistrar.Register(Environment.ProcessPath ?? System.Reflection.Assembly.GetExecutingAssembly().Location);
+        var exePath = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(exePath))
+            AutoStartRegistrar.Register(exePath);
         await host.RunAsync();
     }
     catch (Exception ex)
