@@ -58,3 +58,9 @@ CREATE TABLE IF NOT EXISTS config (
     in_progress_status_name     TEXT NOT NULL DEFAULT 'In Progress',
     transition_to_status_name   TEXT NOT NULL DEFAULT 'Review'
 );
+
+CREATE TABLE IF NOT EXISTS tracked_repo (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    path       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
