@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using TmTimeTracker.Configuration;
 using TmTimeTracker.Data;
+using TmTimeTracker.Jira;
 using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
 
@@ -39,6 +41,43 @@ public static class HostingExtensions
             services.AddHostedService<RememberWatcher>();
             services.AddHostedService<TimeAggregator>();
         });
+        return builder;
+    }
+
+    public static IHostBuilder AddJiraServices(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddHttpClient();
+            services.AddSingleton<ITokenProtector, DpapiTokenProtector>();
+            services.AddSingleton(sp =>
+            {
+                var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("jira-oauth");
+                var secrets = sp.GetRequiredService<AppSecrets>();
+                return new JiraOAuthClient(http, secrets.Atlassian);
+            });
+            services.AddSingleton(sp => new OAuthCoordinator(
+                sp.GetRequiredService<OAuthStateRepository>(),
+                sp.GetRequiredService<ITokenProtector>(),
+                sp.GetRequiredService<JiraOAuthClient>(),
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("jira-cloud"),
+                sp.GetRequiredService<ILogger<OAuthCoordinator>>()));
+            services.AddSingleton<IAccessTokenSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
+            services.AddSingleton(sp =>
+            {
+                var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("jira-api");
+                var tokens = sp.GetRequiredService<IAccessTokenSource>();
+                var log = sp.GetRequiredService<ILogger<JiraApiClient>>();
+                return new JiraApiClient(http, tokens, log);
+            });
+            services.AddSingleton<LocalCallbackListener>();
+        });
+        return builder;
+    }
+
+    public static IHostBuilder AddPollServices(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services => services.AddHostedService<JiraPollService>());
         return builder;
     }
 }
