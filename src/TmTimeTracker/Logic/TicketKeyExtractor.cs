@@ -4,7 +4,7 @@ namespace TmTimeTracker.Logic;
 
 public static class TicketKeyExtractor
 {
-    private static readonly Regex Pattern = new(@"\bTM-\d+\b",
+    private static readonly Regex Pattern = new(@"\b[A-Z][A-Z0-9_]+-\d+\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static string? Extract(string? branchName)

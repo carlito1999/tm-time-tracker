@@ -12,7 +12,11 @@ public class TicketKeyExtractorTests
     [InlineData("bugfix/TM-7-fix-typo", "TM-7")]
     [InlineData("TM-100", "TM-100")]
     [InlineData("user/lefteris/TM-42-poc", "TM-42")]
-    public void Extracts_first_TM_token(string branch, string expected)
+    [InlineData("ABC-123", "ABC-123")]
+    [InlineData("feature/PROJ-7-add-thing", "PROJ-7")]
+    [InlineData("bugfix/CORE_API-42-fix", "CORE_API-42")]
+    [InlineData("release/V2-9", "V2-9")]
+    public void Extracts_first_jira_key(string branch, string expected)
     {
         TicketKeyExtractor.Extract(branch).Should().Be(expected);
     }
@@ -23,7 +27,9 @@ public class TicketKeyExtractorTests
     [InlineData("feature/no-ticket")]
     [InlineData("")]
     [InlineData("TM-")]
-    [InlineData("XX-29")]
+    [InlineData("abc-29")]
+    [InlineData("A-1")]
+    [InlineData("release-2024")]
     public void Returns_null_when_no_match(string branch)
     {
         TicketKeyExtractor.Extract(branch).Should().BeNull();

@@ -50,7 +50,8 @@ public sealed class DashboardWindow : Form
             ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-            RowHeadersVisible = false
+            RowHeadersVisible = false,
+            ShowCellToolTips = false
         };
         _pending.Columns.Add("ticket", "Ticket");
         _pending.Columns.Add("minutes", "Minutes");
