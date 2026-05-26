@@ -31,6 +31,7 @@ public static class HostingExtensions
             services.AddSingleton<IIdleProbe, Win32IdleProbe>();
             services.AddSingleton<IGitBranchProbe, GitBranchProbe>();
             services.AddSingleton<IForegroundWindowProbe, Win32ForegroundWindowProbe>();
+            services.AddSingleton<IClaudeCodeActivityProbe, FileClaudeCodeActivityProbe>();
             services.AddSingleton<ActiveRepoResolver>();
         });
         return builder;
