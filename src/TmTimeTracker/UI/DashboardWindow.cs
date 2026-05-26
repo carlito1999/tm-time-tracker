@@ -10,7 +10,7 @@ public sealed class DashboardWindow : Form
 {
     private readonly IServiceProvider _sp;
     private readonly ILogger<DashboardWindow> _log;
-    private readonly Label _stateBadge, _branchLabel, _ticketLabel;
+    private readonly Label _stateBadge, _branchLabel, _ticketLabel, _claudeBadge;
     private readonly DataGridView _pending;
     private readonly ListView _events;
     private readonly ComboBox _filter;
@@ -36,7 +36,12 @@ public sealed class DashboardWindow : Form
         };
         _branchLabel = new Label { Top = 12, Left = 160, AutoSize = true, Text = "Branch: —" };
         _ticketLabel = new Label { Top = 12, Left = 440, AutoSize = true, Text = "Ticket: —" };
-        top.Controls.AddRange(new Control[] { _stateBadge, _branchLabel, _ticketLabel });
+        _claudeBadge = new Label
+        {
+            Top = 12, Left = 640, AutoSize = true, Text = "Claude: idle",
+            ForeColor = Color.DarkGray
+        };
+        top.Controls.AddRange(new Control[] { _stateBadge, _branchLabel, _ticketLabel, _claudeBadge });
         Controls.Add(top);
 
         _pending = new DataGridView
@@ -191,6 +196,7 @@ public sealed class DashboardWindow : Form
         using var scope = _sp.CreateScope();
         var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
         var oauth = scope.ServiceProvider.GetRequiredService<OAuthStateRepository>();
+        UpdateClaudeBadge(scope.ServiceProvider);
         var open = tickets.GetAllOpen();
         _pending.Rows.Clear();
         foreach (var t in open)
@@ -211,6 +217,32 @@ public sealed class DashboardWindow : Form
         else
         {
             _nextPoll.Text = "Next: —";
+        }
+    }
+
+    private void UpdateClaudeBadge(IServiceProvider sp)
+    {
+        var claude = sp.GetRequiredService<TmTimeTracker.Platform.IClaudeCodeActivityProbe>();
+        var resolver = sp.GetRequiredService<ActiveRepoResolver>();
+        var activeRepo = resolver.LastResolution?.RepoPath;
+        if (activeRepo is null)
+        {
+            _claudeBadge.Text = "Claude: idle";
+            _claudeBadge.ForeColor = Color.DarkGray;
+            return;
+        }
+        var snap = claude.Snapshot();
+        var slug = TmTimeTracker.Logic.ClaudeProjectSlug.FromPath(activeRepo);
+        if (snap.TryGetValue(slug, out var mtime)
+            && (DateTime.UtcNow - mtime) <= TimeSpan.FromSeconds(60))
+        {
+            _claudeBadge.Text = "Claude: ● active";
+            _claudeBadge.ForeColor = Color.MediumVioletRed;
+        }
+        else
+        {
+            _claudeBadge.Text = "Claude: idle";
+            _claudeBadge.ForeColor = Color.DarkGray;
         }
     }
 
