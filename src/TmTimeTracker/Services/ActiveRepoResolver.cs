@@ -10,10 +10,12 @@ public sealed record ActiveResolution(string RepoPath, string? Branch, string? T
 public sealed class ActiveRepoResolver
 {
     private static readonly TimeSpan ActivityWindow = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ClaudeActivityWindow = TimeSpan.FromSeconds(60);
     private static readonly string[] VsCodeProcessNames = { "Code", "Code.exe" };
 
     private readonly TrackedRepoRepository _repos;
     private readonly IForegroundWindowProbe _foreground;
+    private readonly IClaudeCodeActivityProbe _claude;
     private readonly IGitBranchProbe _git;
     private readonly IClock _clock;
     private readonly ILogger<ActiveRepoResolver> _log;
@@ -21,10 +23,15 @@ public sealed class ActiveRepoResolver
     private ActiveResolution? _last;
 
     public ActiveRepoResolver(TrackedRepoRepository repos, IForegroundWindowProbe foreground,
-        IGitBranchProbe git, IClock clock, ILogger<ActiveRepoResolver> log)
+        IClaudeCodeActivityProbe claude, IGitBranchProbe git, IClock clock,
+        ILogger<ActiveRepoResolver> log)
     {
-        _repos = repos; _foreground = foreground; _git = git; _clock = clock; _log = log;
+        _repos = repos; _foreground = foreground; _claude = claude;
+        _git = git; _clock = clock; _log = log;
     }
+
+    /// <summary>Most recent resolution result. Used by IdleMonitor to gate Claude-active override.</summary>
+    public ActiveResolution? LastResolution => _last;
 
     public ActiveResolution? Resolve()
     {
@@ -33,6 +40,22 @@ public sealed class ActiveRepoResolver
         {
             _last = null;
             return null;
+        }
+
+        var now = _clock.UtcNow;
+
+        // Tier 0: Claude Code wrote within last 60s for one of our tracked repos
+        var claudeSnap = _claude.Snapshot();
+        var freshClaude = tracked
+            .Select(r => (repo: r, mtime: GetClaudeMtime(claudeSnap, r.Path)))
+            .Where(x => x.mtime.HasValue && (now - x.mtime!.Value) <= ClaudeActivityWindow)
+            .OrderByDescending(x => x.mtime!.Value)
+            .Select(x => x.repo)
+            .FirstOrDefault();
+        if (freshClaude is not null && Directory.Exists(freshClaude.Path))
+        {
+            _last = LookupBranch(freshClaude.Path);
+            return _last;
         }
 
         // Tier 1: VS Code window title
@@ -53,7 +76,6 @@ public sealed class ActiveRepoResolver
         }
 
         // Tier 2: recent activity polling
-        var now = _clock.UtcNow;
         var fresh = tracked
             .Select(r => (r, mtime: TryReadHeadMtime(r.Path)))
             .Where(x => x.mtime.HasValue && (now - x.mtime!.Value) <= ActivityWindow)
@@ -72,6 +94,12 @@ public sealed class ActiveRepoResolver
 
     private static bool IsVsCode(string processName) =>
         VsCodeProcessNames.Any(p => string.Equals(p, processName, StringComparison.OrdinalIgnoreCase));
+
+    private static DateTime? GetClaudeMtime(IReadOnlyDictionary<string, DateTime> snap, string repoPath)
+    {
+        var slug = ClaudeProjectSlug.FromPath(repoPath);
+        return snap.TryGetValue(slug, out var mtime) ? mtime : null;
+    }
 
     private ActiveResolution? LookupBranch(string repoPath)
     {
