@@ -58,6 +58,30 @@ public class IdleStateMachineTests
     }
 
     [Fact]
+    public void Claude_active_keeps_state_active_past_idle_threshold()
+    {
+        var sm = New(600);
+        sm.Observe(idleSeconds: 9_999, isLocked: false, claudeActive: true);
+        sm.Current.Should().Be(UserActivityState.Active);
+    }
+
+    [Fact]
+    public void Claude_active_does_not_override_lock()
+    {
+        var sm = New(600);
+        sm.Observe(idleSeconds: 5, isLocked: true, claudeActive: true);
+        sm.Current.Should().Be(UserActivityState.Idle);
+    }
+
+    [Fact]
+    public void Claude_inactive_with_idle_past_threshold_goes_idle()
+    {
+        var sm = New(600);
+        sm.Observe(idleSeconds: 700, isLocked: false, claudeActive: false);
+        sm.Current.Should().Be(UserActivityState.Idle);
+    }
+
+    [Fact]
     public void Emits_transition_on_change_only()
     {
         var sm = New(600);

@@ -15,11 +15,13 @@ public sealed class IdleStateMachine
 
     public event Action<UserActivityState>? OnTransition;
 
-    public void Observe(long idleSeconds, bool isLocked)
+    public void Observe(long idleSeconds, bool isLocked, bool claudeActive = false)
     {
-        var next = (isLocked || idleSeconds >= _threshold.TotalSeconds)
+        var next = isLocked
             ? UserActivityState.Idle
-            : UserActivityState.Active;
+            : (claudeActive || idleSeconds < _threshold.TotalSeconds)
+                ? UserActivityState.Active
+                : UserActivityState.Idle;
 
         if (next == Current) return;
         Current = next;
