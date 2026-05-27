@@ -26,6 +26,7 @@ public sealed class SetupWindow : Form
     {
         _sp = sp; _log = log;
         Text = "TmTimeTracker — Setup";
+        Icon = AppIcon.Load();
         Width = 600; Height = 480;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;

@@ -29,9 +29,43 @@ public sealed class OAuthCoordinator : IAccessTokenSource
     public async Task CompleteFirstRunAsync(string authorizationCode, CancellationToken ct)
     {
         var token = await _oauth.ExchangeCodeAsync(authorizationCode, ct).ConfigureAwait(false);
-        var cloudId = await FetchCloudIdAsync(token.AccessToken, ct).ConfigureAwait(false);
-        SaveTokens(token, cloudId);
-        _log.LogInformation("OAuth bootstrap complete; cloudId={CloudId}", cloudId);
+        var resources = await FetchAccessibleAsync(token.AccessToken, ct).ConfigureAwait(false);
+        if (resources.Count == 0)
+            throw new InvalidOperationException("No accessible Atlassian sites returned by /accessible-resources.");
+        if (resources.Count > 1)
+            _log.LogWarning(
+                "OAuth granted access to {Count} sites; defaulting to {Url}. Switch via Settings → Connection.",
+                resources.Count, resources[0].Url);
+        SaveTokens(token, resources[0].Id);
+        _log.LogInformation("OAuth bootstrap complete; cloudId={CloudId} url={Url}",
+            resources[0].Id, resources[0].Url);
+    }
+
+    public async Task ReauthorizeAsync(string authorizationCode, CancellationToken ct)
+    {
+        var token = await _oauth.ExchangeCodeAsync(authorizationCode, ct).ConfigureAwait(false);
+        var existing = _state.Load()
+            ?? throw new InvalidOperationException("Cannot reauthorize before initial setup.");
+        SaveTokens(token, existing.CloudId);
+        _log.LogInformation("OAuth reauthorization complete; kept cloudId={CloudId}", existing.CloudId);
+    }
+
+    public async Task<IReadOnlyList<AtlassianResource>> ListAccessibleAsync(CancellationToken ct)
+    {
+        var (token, _) = await GetAccessTokenAsync(ct).ConfigureAwait(false);
+        return await FetchAccessibleAsync(token, ct).ConfigureAwait(false);
+    }
+
+    public void SwitchCloudId(string newCloudId)
+    {
+        _state.UpdateCloudId(newCloudId);
+        _log.LogInformation("Active cloudId switched to {CloudId}", newCloudId);
+    }
+
+    public void Disconnect()
+    {
+        _state.Clear();
+        _log.LogInformation("OAuth state cleared by user (Disconnect).");
     }
 
     public async Task<(string AccessToken, string CloudId)> GetAccessTokenAsync(CancellationToken ct)
@@ -63,7 +97,7 @@ public sealed class OAuthCoordinator : IAccessTokenSource
         return Task.CompletedTask;
     }
 
-    private async Task<string> FetchCloudIdAsync(string accessToken, CancellationToken ct)
+    private async Task<IReadOnlyList<AtlassianResource>> FetchAccessibleAsync(string accessToken, CancellationToken ct)
     {
         var req = new HttpRequestMessage(HttpMethod.Get,
             "https://api.atlassian.com/oauth/token/accessible-resources");
@@ -72,9 +106,7 @@ public sealed class OAuthCoordinator : IAccessTokenSource
         resp.EnsureSuccessStatusCode();
         var resources = await resp.Content.ReadFromJsonAsync<AtlassianResource[]>(cancellationToken: ct)
                                           .ConfigureAwait(false);
-        if (resources is null || resources.Length == 0)
-            throw new InvalidOperationException("No accessible Atlassian sites returned by /accessible-resources.");
-        return resources[0].Id;
+        return resources ?? Array.Empty<AtlassianResource>();
     }
 
     private void SaveTokens(TokenResponse token, string cloudId) =>

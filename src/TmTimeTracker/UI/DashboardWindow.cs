@@ -1,17 +1,33 @@
-using Microsoft.Extensions.DependencyInjection;
+using System.Net;
 using Microsoft.Extensions.Logging;
 using TmTimeTracker.Data;
+using TmTimeTracker.Jira;
 using TmTimeTracker.Logic;
+using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
+using TmTimeTracker.UI.Theming;
 
 namespace TmTimeTracker.UI;
 
 public sealed class DashboardWindow : Form
 {
-    private readonly IServiceProvider _sp;
+    private readonly IEventBus _bus;
+    private readonly TicketTimeRepository _tickets;
+    private readonly OAuthStateRepository _oauthState;
+    private readonly RememberEntryRepository _entries;
+    private readonly ConfigRepository _config;
+    private readonly IClock _clock;
+    private readonly IClaudeCodeActivityProbe _claudeProbe;
+    private readonly ActiveRepoResolver _resolver;
+    private readonly JiraApiClient _api;
     private readonly ILogger<DashboardWindow> _log;
-    private readonly Label _stateBadge, _branchLabel, _ticketLabel, _claudeBadge;
+
+    private readonly StatusPill _statePill;
+    private readonly StatusPill _branchPill;
+    private readonly StatusPill _ticketPill;
+    private readonly StatusPill _claudePill;
     private readonly DataGridView _pending;
+    private readonly Label _emptyPending;
     private readonly ListView _events;
     private readonly ComboBox _filter;
     private readonly StatusStrip _statusBar;
@@ -21,94 +37,244 @@ public sealed class DashboardWindow : Form
     private readonly LinkedList<DomainEvent> _eventBuffer = new();
     private CancellationTokenSource? _subscriptionCts;
 
-    public DashboardWindow(IServiceProvider sp, ILogger<DashboardWindow> log)
+    public DashboardWindow(
+        IEventBus bus,
+        TicketTimeRepository tickets,
+        OAuthStateRepository oauthState,
+        RememberEntryRepository entries,
+        ConfigRepository config,
+        IClock clock,
+        IClaudeCodeActivityProbe claudeProbe,
+        ActiveRepoResolver resolver,
+        JiraApiClient api,
+        ILogger<DashboardWindow> log)
     {
-        _sp = sp; _log = log;
+        _bus = bus;
+        _tickets = tickets;
+        _oauthState = oauthState;
+        _entries = entries;
+        _config = config;
+        _clock = clock;
+        _claudeProbe = claudeProbe;
+        _resolver = resolver;
+        _api = api;
+        _log = log;
+
         Text = "TmTimeTracker — Dashboard";
-        Width = 800; Height = 600;
+        Icon = AppIcon.Load();
+        ClientSize = new Size(880, 640);
+        MinimumSize = new Size(720, 520);
         StartPosition = FormStartPosition.CenterScreen;
 
-        var top = new Panel { Top = 0, Left = 0, Width = 800, Height = 40, Dock = DockStyle.Top };
-        _stateBadge = new Label
+        _statusBar = new StatusStrip { Dock = DockStyle.Bottom };
+        _authStatus = new ToolStripStatusLabel("Auth: —");
+        _lastPoll = new ToolStripStatusLabel("Last Jira poll: —");
+        _nextPoll = new ToolStripStatusLabel("Next: —");
+        _statusBar.Items.AddRange(new ToolStripItem[]
         {
-            Top = 10, Left = 10, AutoSize = true, Text = "● —",
-            Font = new Font("Segoe UI", 10, FontStyle.Bold)
-        };
-        _branchLabel = new Label { Top = 12, Left = 160, AutoSize = true, Text = "Branch: —" };
-        _ticketLabel = new Label { Top = 12, Left = 440, AutoSize = true, Text = "Ticket: —" };
-        _claudeBadge = new Label
+            _authStatus, new ToolStripSeparator(),
+            _lastPoll,   new ToolStripSeparator(),
+            _nextPoll
+        });
+        Controls.Add(_statusBar);
+
+        _statePill  = MakePill("Idle",        PillTone.Idle,    dot: true);
+        _branchPill = MakePill("no branch",   PillTone.Neutral, dot: false, mono: true);
+        _ticketPill = MakePill("no ticket",   PillTone.Neutral, dot: false, mono: true);
+        _claudePill = MakePill("Claude idle", PillTone.Idle,    dot: true);
+
+        var headerFlow = new FlowLayoutPanel
         {
-            Top = 12, Left = 640, AutoSize = true, Text = "Claude: idle",
-            ForeColor = Color.DarkGray
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(12, 12, 12, 8)
         };
-        top.Controls.AddRange(new Control[] { _stateBadge, _branchLabel, _ticketLabel, _claudeBadge });
-        Controls.Add(top);
+        foreach (var pill in new[] { _statePill, _branchPill, _ticketPill, _claudePill })
+        {
+            pill.Margin = new Padding(0, 0, 8, 0);
+            headerFlow.Controls.Add(pill);
+        }
+
+        var pendingHeading = MakeHeading("Pending worklogs");
 
         _pending = new DataGridView
         {
-            Top = 40, Left = 0, Width = 800, Height = 220, Dock = DockStyle.Top,
-            ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
-            SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false,
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AllowUserToResizeRows = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             RowHeadersVisible = false,
-            ShowCellToolTips = false
+            ShowCellToolTips = false,
+            ScrollBars = ScrollBars.Vertical
         };
-        _pending.Columns.Add("ticket", "Ticket");
-        _pending.Columns.Add("minutes", "Minutes");
-        _pending.Columns.Add("first_seen", "First seen");
-        _pending.Columns.Add("last_polled", "Last Jira poll");
-        Controls.Add(_pending);
+        _pending.Columns.Add("ticket",      "Ticket");
+        _pending.Columns.Add("minutes",     "Min");
+        _pending.Columns.Add("first_seen",  "Started");
+        _pending.Columns.Add("last_polled", "Last poll");
+        _pending.Columns["ticket"].DefaultCellStyle.Font = Theme.Mono;
+        _pending.Columns["minutes"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        _pending.Columns["minutes"].FillWeight = 50;
+        _pending.Columns["first_seen"].DefaultCellStyle.Font = Theme.Mono;
+        _pending.Columns["last_polled"].DefaultCellStyle.Font = Theme.Mono;
 
-        var actions = new Panel { Top = 260, Left = 0, Width = 800, Height = 36, Dock = DockStyle.Top };
-        var submitNow = new Button { Top = 5, Left = 10, Width = 110, Text = "Submit now" };
-        var editSubmit = new Button { Top = 5, Left = 130, Width = 130, Text = "Edit && submit" };
-        var discard = new Button { Top = 5, Left = 270, Width = 90, Text = "Discard" };
-        submitNow.Click += (_, _) => OnSubmitNow();
+        _emptyPending = new Label
+        {
+            Text = "No pending worklogs — running clocks will appear here.",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = Theme.Body,
+            ForeColor = Theme.TextSecondary,
+            Visible = false
+        };
+
+        var pendingCell = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(12, 0, 12, 0)
+        };
+        pendingCell.Controls.Add(_pending);
+        pendingCell.Controls.Add(_emptyPending);
+        _pending.BringToFront();
+
+        var submitNow  = new FlatButton { Text = "▶  Submit now",     Kind = ButtonKind.Accent, Width = 140 };
+        var editSubmit = new FlatButton { Text = "✎  Edit && submit", Width = 160 };
+        var discard    = new FlatButton { Text = "✕  Discard",        Kind = ButtonKind.Danger, Width = 120 };
+        submitNow.Click  += (_, _) => OnSubmitNow();
         editSubmit.Click += (_, _) => OnEditSubmit();
-        discard.Click += (_, _) => OnDiscard();
-        actions.Controls.AddRange(new Control[] { submitNow, editSubmit, discard });
-        Controls.Add(actions);
+        discard.Click    += (_, _) => OnDiscard();
 
-        var filterPanel = new Panel { Top = 296, Left = 0, Width = 800, Height = 28, Dock = DockStyle.Top };
-        filterPanel.Controls.Add(new Label { Top = 5, Left = 10, AutoSize = true, Text = "Recent events  Filter:" });
+        var actionsFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(12, 8, 12, 8)
+        };
+        foreach (var b in new[] { submitNow, editSubmit, discard })
+        {
+            b.Margin = new Padding(0, 0, 8, 0);
+            actionsFlow.Controls.Add(b);
+        }
+
+        var activityHeading = MakeHeading("Recent activity");
         _filter = new ComboBox
         {
-            Top = 2, Left = 160, Width = 130, DropDownStyle = ComboBoxStyle.DropDownList
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 130
         };
         _filter.Items.AddRange(new object[] { "All", "Activity", "Branch", "Jira", "Worklog" });
         _filter.SelectedIndex = 0;
         _filter.SelectedIndexChanged += (_, _) => RenderEvents();
-        filterPanel.Controls.Add(_filter);
-        Controls.Add(filterPanel);
+
+        var filterControls = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(0, 12, 12, 4),
+            Anchor = AnchorStyles.Right | AnchorStyles.Top
+        };
+        filterControls.Controls.Add(new Label
+        {
+            Text = "Filter",
+            Font = Theme.Body,
+            ForeColor = Theme.TextSecondary,
+            AutoSize = true,
+            Margin = new Padding(0, 6, 8, 0)
+        });
+        filterControls.Controls.Add(_filter);
+
+        var filterRowPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true
+        };
+        filterRowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        filterRowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        filterRowPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        filterRowPanel.Controls.Add(activityHeading, 0, 0);
+        filterRowPanel.Controls.Add(filterControls, 1, 0);
 
         _events = new ListView
         {
-            Top = 324, Left = 0, Width = 800, Height = 200, Dock = DockStyle.Top,
-            View = View.Details, FullRowSelect = true
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            Margin = new Padding(12, 0, 12, 12)
         };
-        _events.Columns.Add("Time", 80);
-        _events.Columns.Add("Kind", 110);
-        _events.Columns.Add("Detail", 600);
-        Controls.Add(_events);
+        _events.Columns.Add("Time",   90);
+        _events.Columns.Add("Kind",   150);
+        _events.Columns.Add("Detail", 560);
 
-        _statusBar = new StatusStrip();
-        _authStatus = new ToolStripStatusLabel("Auth: —");
-        _lastPoll = new ToolStripStatusLabel("Last Jira poll: —");
-        _nextPoll = new ToolStripStatusLabel("Next: —");
-        _statusBar.Items.AddRange(new ToolStripItem[] { _authStatus, _lastPoll, _nextPoll });
-        Controls.Add(_statusBar);
+        var eventsCell = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(12, 0, 12, 12)
+        };
+        eventsCell.Controls.Add(_events);
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 6
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // 0: header pills
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // 1: pending heading
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 220));   // 2: pending grid / empty
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // 3: actions
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // 4: activity heading + filter
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // 5: events list
+        root.Controls.Add(headerFlow,     0, 0);
+        root.Controls.Add(pendingHeading, 0, 1);
+        root.Controls.Add(pendingCell,    0, 2);
+        root.Controls.Add(actionsFlow,    0, 3);
+        root.Controls.Add(filterRowPanel, 0, 4);
+        root.Controls.Add(eventsCell,     0, 5);
+        Controls.Add(root);
 
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 5_000 };
         _refreshTimer.Tick += (_, _) => RefreshFromDb();
 
         FormClosing += (_, e) =>
         {
+            if (e.CloseReason != CloseReason.UserClosing) return;
             e.Cancel = true;
             Hide();
             _subscriptionCts?.Cancel();
             _refreshTimer.Stop();
         };
+
+        Theme.Apply(this);
     }
+
+    private static StatusPill MakePill(string text, PillTone tone, bool dot, bool mono = false)
+    {
+        var pill = new StatusPill { ShowDot = dot };
+        if (mono) pill.Font = Theme.Mono;
+        pill.Set(text, tone);
+        return pill;
+    }
+
+    private static Label MakeHeading(string text) => new()
+    {
+        Text = text,
+        Font = Theme.Heading,
+        ForeColor = Theme.TextPrimary,
+        AutoSize = true,
+        Padding = new Padding(12, 12, 12, 4)
+    };
 
     public void ShowAndSubscribe()
     {
@@ -116,13 +282,12 @@ public sealed class DashboardWindow : Form
         Show();
         BringToFront();
         _subscriptionCts = new CancellationTokenSource();
-        var bus = _sp.GetRequiredService<IEventBus>();
         var token = _subscriptionCts.Token;
         _ = Task.Run(async () =>
         {
             try
             {
-                await foreach (var evt in bus.Subscribe(token).ConfigureAwait(false))
+                await foreach (var evt in _bus.Subscribe(token).ConfigureAwait(false))
                 {
                     if (IsDisposed) return;
                     BeginInvoke(() => OnEvent(evt));
@@ -142,12 +307,14 @@ public sealed class DashboardWindow : Form
         switch (evt)
         {
             case ActivityChanged a:
-                _stateBadge.Text = a.State == UserActivityState.Active ? "● ACTIVE" : "● IDLE";
-                _stateBadge.ForeColor = a.State == UserActivityState.Active ? Color.DarkGreen : Color.DarkGray;
+                if (a.State == UserActivityState.Active)
+                    _statePill.Set("Active", PillTone.Active);
+                else
+                    _statePill.Set("Idle", PillTone.Idle);
                 break;
             case BranchChanged b:
-                _branchLabel.Text = $"Branch: {b.Branch ?? "(none)"}";
-                _ticketLabel.Text = $"Ticket: {b.TicketKey ?? "(none)"}";
+                _branchPill.Set(b.Branch ?? "no branch", PillTone.Neutral);
+                _ticketPill.Set(b.TicketKey ?? "no ticket", b.TicketKey is null ? PillTone.Neutral : PillTone.Active);
                 RefreshFromDb();
                 break;
             case WorklogSubmitted:
@@ -194,22 +361,26 @@ public sealed class DashboardWindow : Form
 
     private void RefreshFromDb()
     {
-        using var scope = _sp.CreateScope();
-        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
-        var oauth = scope.ServiceProvider.GetRequiredService<OAuthStateRepository>();
-        UpdateClaudeBadge(scope.ServiceProvider);
-        var open = tickets.GetAllOpen();
+        UpdateClaudeBadge();
+        var open = _tickets.GetAllOpen();
         _pending.Rows.Clear();
         foreach (var t in open)
         {
-            _pending.Rows.Add(t.TicketKey, t.MinutesActive,
+            _pending.Rows.Add(
+                t.TicketKey,
+                t.MinutesActive,
                 t.CycleStarted.ToLocalTime().ToString("HH:mm"),
                 t.LastPolled?.ToLocalTime().ToString("HH:mm:ss") ?? "—");
         }
-        _authStatus.Text = oauth.Load() is not null ? "Auth: ✓" : "Auth: ✗ (open Settings)";
+        bool hasRows = _pending.Rows.Count > 0;
+        _pending.Visible = hasRows;
+        _emptyPending.Visible = !hasRows;
+        if (!hasRows) _emptyPending.BringToFront();
+
+        _authStatus.Text = _oauthState.Load() is not null ? "Auth: ✓" : "Auth: ✗ (open Settings)";
         var maxPoll = open.Select(o => o.LastPolled).Where(p => p is not null).Max();
         _lastPoll.Text = $"Last Jira poll: {(maxPoll?.ToLocalTime().ToString("HH:mm:ss") ?? "—")}";
-        var cfg = scope.ServiceProvider.GetRequiredService<ConfigRepository>().TryGet();
+        var cfg = _config.TryGet();
         if (cfg is not null && maxPoll is not null)
         {
             var nextIn = (int)(maxPoll.Value.AddSeconds(cfg.JiraPollIntervalSeconds) - DateTime.UtcNow).TotalSeconds;
@@ -221,29 +392,24 @@ public sealed class DashboardWindow : Form
         }
     }
 
-    private void UpdateClaudeBadge(IServiceProvider sp)
+    private void UpdateClaudeBadge()
     {
-        var claude = sp.GetRequiredService<TmTimeTracker.Platform.IClaudeCodeActivityProbe>();
-        var resolver = sp.GetRequiredService<ActiveRepoResolver>();
-        var activeRepo = resolver.LastResolution?.RepoPath;
+        var activeRepo = _resolver.LastResolution?.RepoPath;
         if (activeRepo is null)
         {
-            _claudeBadge.Text = "Claude: idle";
-            _claudeBadge.ForeColor = Color.DarkGray;
+            _claudePill.Set("Claude idle", PillTone.Idle);
             return;
         }
-        var snap = claude.Snapshot();
-        var slug = TmTimeTracker.Logic.ClaudeProjectSlug.FromPath(activeRepo);
+        var snap = _claudeProbe.Snapshot();
+        var slug = ClaudeProjectSlug.FromPath(activeRepo);
         if (snap.TryGetValue(slug, out var mtime)
             && (DateTime.UtcNow - mtime) <= TimeSpan.FromSeconds(60))
         {
-            _claudeBadge.Text = "Claude: ● active";
-            _claudeBadge.ForeColor = Color.MediumVioletRed;
+            _claudePill.Set("Claude active", PillTone.Claude);
         }
         else
         {
-            _claudeBadge.Text = "Claude: idle";
-            _claudeBadge.ForeColor = Color.DarkGray;
+            _claudePill.Set("Claude idle", PillTone.Idle);
         }
     }
 
@@ -263,12 +429,9 @@ public sealed class DashboardWindow : Form
         var key = CurrentTicket();
         if (key is null) return;
 
-        using var scope = _sp.CreateScope();
-        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
-        var entries = scope.ServiceProvider.GetRequiredService<RememberEntryRepository>();
-        var cycle = tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == key);
+        var cycle = _tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == key);
         if (cycle is null) return;
-        var unconsumed = entries.GetUnconsumedForTicket(key);
+        var unconsumed = _entries.GetUnconsumedForTicket(key);
         var description = WorklogDescriptionBuilder.Build(unconsumed);
         using var form = new WorklogEditForm(key, cycle.MinutesActive, description);
         if (form.ShowDialog(this) != DialogResult.OK) return;
@@ -280,9 +443,7 @@ public sealed class DashboardWindow : Form
     {
         var key = CurrentTicket();
         if (key is null) return;
-        using var scope = _sp.CreateScope();
-        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
-        var cycle = tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == key);
+        var cycle = _tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == key);
         if (cycle is null) return;
 
         var confirm = MessageBox.Show(this,
@@ -290,19 +451,15 @@ public sealed class DashboardWindow : Form
             "TmTimeTracker", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (confirm != DialogResult.Yes) return;
 
-        var clock = scope.ServiceProvider.GetRequiredService<IClock>();
-        tickets.MarkSubmitted(cycle.Id, "discarded:" + Guid.NewGuid().ToString("N"), 0, clock.UtcNow);
+        _tickets.MarkSubmitted(cycle.Id, "discarded:" + Guid.NewGuid().ToString("N"), 0, _clock.UtcNow);
         RefreshFromDb();
     }
 
     private void SubmitObserved(string ticketKey)
     {
-        using var scope = _sp.CreateScope();
-        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
-        var entries = scope.ServiceProvider.GetRequiredService<RememberEntryRepository>();
-        var cycle = tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == ticketKey);
+        var cycle = _tickets.GetAllOpen().FirstOrDefault(c => c.TicketKey == ticketKey);
         if (cycle is null) return;
-        var unconsumed = entries.GetUnconsumedForTicket(ticketKey);
+        var unconsumed = _entries.GetUnconsumedForTicket(ticketKey);
         var description = WorklogDescriptionBuilder.Build(unconsumed);
         Submit(cycle, cycle.MinutesActive, description, unconsumed);
     }
@@ -310,16 +467,10 @@ public sealed class DashboardWindow : Form
     private void Submit(TicketCycle cycle, int minutes, string description,
                         IReadOnlyList<StoredRememberEntry> unconsumed)
     {
-        using var scope = _sp.CreateScope();
-        var api = scope.ServiceProvider.GetRequiredService<TmTimeTracker.Jira.JiraApiClient>();
-        var tickets = scope.ServiceProvider.GetRequiredService<TicketTimeRepository>();
-        var entriesRepo = scope.ServiceProvider.GetRequiredService<RememberEntryRepository>();
-        var clock = scope.ServiceProvider.GetRequiredService<IClock>();
-
-        var req = WorklogRequestFactory.Build(minutes, description, clock.LocalNow);
-        var resp = api.PostWorklogAsync(cycle.TicketKey, req, CancellationToken.None).GetAwaiter().GetResult();
-        tickets.MarkSubmitted(cycle.Id, resp.Id, minutes, clock.UtcNow);
-        entriesRepo.TagConsumed(unconsumed.Select(e => e.Id).ToList(), cycle.Id);
+        var req = WorklogRequestFactory.Build(minutes, description, _clock.LocalNow);
+        var resp = _api.PostWorklogAsync(cycle.TicketKey, req, CancellationToken.None).GetAwaiter().GetResult();
+        _tickets.MarkSubmitted(cycle.Id, resp.Id, minutes, _clock.UtcNow);
+        _entries.TagConsumed(unconsumed.Select(e => e.Id).ToList(), cycle.Id);
         _log.LogInformation("Worklog {Id} posted to {Ticket} ({Minutes}m)", resp.Id, cycle.TicketKey, minutes);
         RefreshFromDb();
     }
@@ -327,7 +478,21 @@ public sealed class DashboardWindow : Form
     private void ShowError(Exception ex)
     {
         _log.LogError(ex, "Submit action failed");
-        MessageBox.Show(this, $"Failed: {ex.Message}", "TmTimeTracker",
+        var key = CurrentTicket() ?? "this ticket";
+        var msg = ex switch
+        {
+            HttpRequestException { StatusCode: HttpStatusCode.NotFound } =>
+                $"Jira returned 404 for {key}.\n\n" +
+                "The ticket does not exist in your Jira project, or your account does not have permission to view it.\n\n" +
+                "Verify the ticket key matches your project (browse to it in Jira). " +
+                "If the branch name produced a phantom key, use Discard to clear the local time.",
+            HttpRequestException { StatusCode: HttpStatusCode.Forbidden } =>
+                $"Jira returned 403 for {key}.\n\nYour account does not have permission to log time on this ticket.",
+            HttpRequestException { StatusCode: HttpStatusCode.Unauthorized } =>
+                "Jira returned 401 (unauthorized).\n\nYour OAuth token may have expired — open Settings and reconnect.",
+            _ => $"Failed: {ex.Message}"
+        };
+        MessageBox.Show(this, msg, "TmTimeTracker",
             MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 }

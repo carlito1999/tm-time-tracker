@@ -48,18 +48,26 @@ public sealed class JiraPollService : BackgroundService
         foreach (var cycle in open)
         {
             ct.ThrowIfCancellationRequested();
-            var issue = await _api.GetIssueAsync(cycle.TicketKey, ct).ConfigureAwait(false);
-            var nowUtc = _clock.UtcNow;
-            var previous = cycle.LastSeenStatus;
-            _tickets.UpdateStatusSnapshot(cycle.Id, issue.Fields.Status.Name, nowUtc);
-
-            if (previous is null) continue;
-
-            if (issue.Fields.Status.Name == transitionTo && previous != transitionTo)
+            try
             {
-                await _bus.PublishAsync(
-                    new JiraStatusTransition(cycle.TicketKey, previous, issue.Fields.Status.Name, nowUtc),
-                    ct).ConfigureAwait(false);
+                var issue = await _api.GetIssueAsync(cycle.TicketKey, ct).ConfigureAwait(false);
+                var nowUtc = _clock.UtcNow;
+                var previous = cycle.LastSeenStatus;
+                _tickets.UpdateStatusSnapshot(cycle.Id, issue.Fields.Status.Name, nowUtc);
+
+                if (previous is null) continue;
+
+                if (issue.Fields.Status.Name == transitionTo && previous != transitionTo)
+                {
+                    await _bus.PublishAsync(
+                        new JiraStatusTransition(cycle.TicketKey, previous, issue.Fields.Status.Name, nowUtc),
+                        ct).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Poll failed for {Ticket}; continuing with remaining cycles", cycle.TicketKey);
             }
         }
     }

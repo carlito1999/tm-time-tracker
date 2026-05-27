@@ -6,10 +6,12 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>..\..\assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Data\Schema.sql" />
+    <EmbeddedResource Include="..\..\assets\app.ico" LogicalName="TmTimeTracker.app.ico" />
   </ItemGroup>
 
   <ItemGroup>

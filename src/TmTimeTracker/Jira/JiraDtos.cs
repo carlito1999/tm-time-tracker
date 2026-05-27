@@ -5,6 +5,7 @@ namespace TmTimeTracker.Jira;
 public sealed record AtlassianResource(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("url")] string Url,
     [property: JsonPropertyName("scopes")] string[] Scopes);
 
 public sealed record TokenResponse(

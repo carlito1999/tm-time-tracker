@@ -38,6 +38,22 @@ public sealed class OAuthStateRepository
             });
     }
 
+    public void UpdateCloudId(string newCloudId)
+    {
+        using var conn = _factory.Open();
+        var rows = conn.Execute(
+            "UPDATE oauth_state SET cloud_id = @c WHERE id = 1",
+            new { c = newCloudId });
+        if (rows == 0)
+            throw new InvalidOperationException("Cannot update cloud_id before OAuth setup completes.");
+    }
+
+    public void Clear()
+    {
+        using var conn = _factory.Open();
+        conn.Execute("DELETE FROM oauth_state WHERE id = 1");
+    }
+
     public OAuthState? Load()
     {
         using var conn = _factory.Open();
