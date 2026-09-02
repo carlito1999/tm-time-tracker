@@ -45,6 +45,18 @@ public sealed class TicketTimeRepository
             new { id = cycleId });
     }
 
+    /// <summary>
+    /// Credits a block of minutes at once - used to hand a ticket the time that was spent before
+    /// its branch was checked out.
+    /// </summary>
+    public void AddMinutes(long cycleId, int minutes)
+    {
+        if (minutes <= 0) return;
+        using var conn = _factory.Open();
+        conn.Execute("UPDATE ticket_time SET minutes_active = minutes_active + @minutes WHERE id=@id",
+            new { id = cycleId, minutes });
+    }
+
     public TicketCycle? GetById(long id)
     {
         using var conn = _factory.Open();

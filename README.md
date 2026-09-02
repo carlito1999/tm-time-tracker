@@ -19,6 +19,12 @@ ticket to **Review**. Time you spend idle, locked, or away never gets credited.
   `feature/TM-29-add-worklog` → `TM-29`).
 - **Counts only active minutes** — Windows idle threshold (default 10 min) and lock
   screen both pause the counter; sleep/hibernate are correctly not credited.
+- **Carries pre-branch time forward** — active minutes on a branch with no ticket in
+  its name (`main`, say) are held rather than discarded, and credited to the next
+  ticket branch you check out. Capped at 30 minutes, so a long unrelated stretch on
+  `main` is not billed to whatever you branch to afterwards. Switching between two
+  *ticket* branches moves nothing: the buffer only fills while no ticket is known.
+  It is in memory, so a restart discards it.
 - **Watches `.remember/` markdown** in each tracked repo for entries tagged with
   the current ticket; uses them as the auto-generated worklog description.
 - **Polls Jira every 90s** for the open tickets' status; when `In Progress → Review`
