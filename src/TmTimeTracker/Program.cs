@@ -13,8 +13,19 @@ using TmTimeTracker.UI;
 
 // Clicking a toast COM-activates this exe. There is no single-instance mutex, so without this
 // guard a click would start a second daemon alongside the running one.
-if (Microsoft.Toolkit.Uwp.Notifications.ToastNotificationManagerCompat.WasCurrentProcessToastActivated())
-    return;
+//
+// Guarded because this runs before AppPaths and before any logger exists: if the WinRT contract
+// is missing or COM is in an odd state, a throw here would kill the daemon at startup with
+// nowhere to report why. Degrading to "possibly two instances" beats "will not start".
+try
+{
+    if (Microsoft.Toolkit.Uwp.Notifications.ToastNotificationManagerCompat.WasCurrentProcessToastActivated())
+        return;
+}
+catch
+{
+    // Fall through to normal startup.
+}
 
 AppPaths.EnsureExists();
 
