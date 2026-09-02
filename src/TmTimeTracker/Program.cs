@@ -11,8 +11,8 @@ using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
 using TmTimeTracker.UI;
 
-// Clicking a toast COM-activates this exe. There is no single-instance mutex, so without this
-// guard a click would start a second daemon alongside the running one.
+// Clicking a toast COM-activates this exe. RunDaemon's SingleInstanceGuard would stop the second
+// daemon anyway, but exiting here means a toast click does no work at all rather than racing it.
 //
 // Guarded because this runs before AppPaths and before any logger exists: if the WinRT contract
 // is missing or COM is in an odd state, a throw here would kill the daemon at startup with
