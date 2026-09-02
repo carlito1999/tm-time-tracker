@@ -28,6 +28,11 @@ public static class HostingExtensions
             services.AddSingleton<TrackedRepoRepository>();
             services.AddSingleton<SlackChannelRepository>();
             services.AddSingleton<JiraSiteRepository>();
+            services.AddSingleton<PrAnnouncementRepository>();
+            // Live once the tray icon attaches; a no-op in the headless CLI modes.
+            services.AddSingleton<TmTimeTracker.UI.TrayBalloonNotifier>();
+            services.AddSingleton<TmTimeTracker.UI.IBalloonNotifier>(
+                sp => sp.GetRequiredService<TmTimeTracker.UI.TrayBalloonNotifier>());
             services.AddSingleton<MinuteSampleRepository>();
             services.AddSingleton<IClock, SystemClock>();
             services.AddSingleton<IEventBus, EventBus>();
@@ -132,7 +137,7 @@ public static class HostingExtensions
                 sp.GetRequiredService<IDevStatusSource>(),
                 sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
 
-            services.AddHostedService<ReviewSlackNotifier>();
+            services.AddHostedService<PrAnnouncementWorker>();
         });
         return builder;
     }

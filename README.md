@@ -260,13 +260,32 @@ dotnet run --project src\TmTimeTracker -- --probe-devstatus <numeric issue id>
 A `200` means pull-request data is reachable; `401 "scope does not match"` means
 the scope is missing or the app has not been reauthorised since it was added.
 
-**Messages that ask for a pull request wait for one.** If a template contains any
-`{PR_*}` placeholder and Jira does not know about a pull request yet, the
-notification is held and retried every 30s for up to 10 minutes rather than
-posted with a literal `{PR_URL}` in it — Jira ingests a pull request moments
-after it is opened, so a promptly-dragged ticket would otherwise always lose that
-race. After 10 minutes the notification is dropped and a warning is logged.
-Templates with no `{PR_*}` placeholder send immediately as before.
+### How announcing works
+
+A background worker owns the whole job as a durable checklist, so nothing is lost
+to a restart:
+
+1. Any tracked ticket sitting in the review status is queued — both from the
+   transition event and by a sweep every 30s, so a missed event or a restart
+   mid-wait recovers on its own.
+2. A queued ticket that has not been announced is polled until Jira reports its
+   pull request. Nothing is posted with a literal `{PR_URL}` in it.
+3. When the pull request appears, the message is posted and the ticket is marked
+   announced — it can never be announced twice.
+4. If **10 minutes pass since the branch's last commit** and Jira still reports no
+   pull request, a tray notification tells you to announce it yourself. Once per
+   ticket, not every poll. Polling continues in case it turns up later.
+
+State lives in the `pr_announcement` table. When a ticket leaves review its row is
+forgotten, so returning to review announces again.
+
+Templates containing no `{PR_*}` placeholder skip the waiting entirely and post
+on the first pass.
+
+A note on where Jira lags: the issue view's Development panel and JQL both read a
+search index that can trail by many minutes — you may see "Create pull request"
+on a ticket whose PR already exists. The worker reads the development *detail*
+endpoint, which is closer to live, so it usually knows before the panel does.
 
 When a ticket has several pull requests, an `OPEN` one always wins over a merged
 or declined one, and the most recently updated wins within that group — so a

@@ -4,6 +4,8 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The worker raises tray balloons, so tests need WinForms types like ToolTipIcon. -->
+    <UseWindowsForms>true</UseWindowsForms>
 
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>

@@ -37,6 +37,7 @@ public sealed class TrayIconHost : BackgroundService
             _sp.GetRequiredService<WindowsHost>().RegisterUiContext(_uiCtx);
 
             _icon = BuildIcon();
+            _sp.GetRequiredService<TrayBalloonNotifier>().Attach(_icon, _uiCtx);
             ready.Set();
             Application.ApplicationExit += (_, _) => _icon.Dispose();
             Application.Run();

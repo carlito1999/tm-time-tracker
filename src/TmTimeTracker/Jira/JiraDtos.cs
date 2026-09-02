@@ -53,7 +53,8 @@ public sealed record DevStatusBranch(
     [property: JsonPropertyName("lastCommit")] DevStatusCommit? LastCommit);
 
 public sealed record DevStatusCommit(
-    [property: JsonPropertyName("url")] string? Url);
+    [property: JsonPropertyName("url")] string? Url,
+    [property: JsonPropertyName("authorTimestamp")] string? AuthorTimestamp = null);
 
 public sealed record DevStatusPullRequest(
     [property: JsonPropertyName("id")] string? Id,

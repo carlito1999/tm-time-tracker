@@ -82,3 +82,18 @@ CREATE TABLE IF NOT EXISTS jira_site (
     cloud_id TEXT NOT NULL,
     site_url TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pr_announcement (
+    ticket_key   TEXT PRIMARY KEY,
+    issue_id     TEXT,
+    summary      TEXT,
+    from_status  TEXT NOT NULL,
+    to_status    TEXT NOT NULL,
+    minutes      INTEGER NOT NULL DEFAULT 0,
+    occurred_at  TEXT NOT NULL,
+    queued_at    TEXT NOT NULL,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    announced_at TEXT,
+    pr_url       TEXT,
+    warned_at    TEXT
+);
