@@ -193,6 +193,68 @@ description. Only entries whose tag contains a TM ticket are included.
 
 ---
 
+## Slack notifications
+
+Posts a message to a per-project Slack channel when a tracked ticket moves into
+your review status. Messages are posted **as you**, not as a bot — so the app
+needs no invitation to private channels you are already in.
+
+### Setup (once, about two minutes)
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From an app
+   manifest**, pick your workspace, and paste
+   [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). The scopes come
+   with it — there is nothing to choose.
+2. Click **Install to Workspace** and approve.
+3. On **OAuth & Permissions**, copy the **User OAuth Token** (starts with `xoxp-`).
+4. In TmTimeTracker: **Settings → Slack**, paste the token, click **Save & test**.
+   You should see `Connected as @you`.
+5. Confirm the channel suggested for each project. The project list builds itself
+   from tickets you have already tracked, and each channel is pre-matched from the
+   Jira project name — you are confirming, not configuring.
+
+Use **Send test message** to check a channel before relying on it. It posts a
+clearly-marked test with sample values, so nobody mistakes it for real work.
+
+### Message templates
+
+Each project owns its own message. The default is:
+
+```
+Done ✅ {TICKET} — {SUMMARY}
+{FROM} -> {TO} · {HOURS}
+{URL}
+```
+
+| Variable | Meaning | Example |
+| -------- | ------- | ------- |
+| `{TICKET}` | Issue key | `SN-296` |
+| `{PROJECT}` | Project key | `SN` |
+| `{SUMMARY}` | Issue summary | `Fix Tolgee warning` |
+| `{URL}` | Link to the issue | `https://acme.atlassian.net/browse/SN-296` |
+| `{FROM}` | Previous status | `In Progress` |
+| `{TO}` | New status | `Review` |
+| `{MINUTES}` | Tracked minutes | `137` |
+| `{HOURS}` | Tracked time | `2h 17m` |
+| `{DATE}` | Local date and time | `2026-09-02 14:31` |
+
+An unknown placeholder is left exactly as you typed it, so `{TIKCET}` shows up
+as a visible typo rather than silently vanishing. The live preview under each
+template renders against sample values as you type.
+
+### What triggers a message
+
+The existing Jira poller already publishes a status-transition event on the
+*edge* — when a tracked ticket's status becomes your review status having
+previously been something else. The notifier just listens to that, which is why
+it fires exactly once per transition and needs no de-duplication of its own.
+
+Only tickets you actually tracked time on can notify, and a project with no
+channel selected simply never notifies. Notification failures are logged and
+dropped: they can never disturb time tracking or worklog submission.
+
+---
+
 ## Configuration & data
 
 ### Where state lives

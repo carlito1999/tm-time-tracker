@@ -285,9 +285,35 @@ Unit tests only; nothing touches the network.
 
 ## 10. Open Questions / Deferred
 
-- **Bitbucket PR trigger** (§2). Would give a real PR link and remove the manual
-  transition, at the cost of an Atlassian API token, a poller, and a
-  `tracked_repo.last_seen_pr_id` watermark. Revisit if the manual step chafes.
+- **`{PR_URL}` variable — PINNED, blocked on a workspace admin.** Agreed
+  approach: have the Bitbucket workspace admin connect Bitbucket to Jira (Jira →
+  Settings → Apps → Bitbucket). That link is a product-to-product connection, not
+  a credential this app holds, so afterwards TmTimeTracker can read PR links with
+  the OAuth token it already has. Blocked because the user is not the workspace
+  admin.
+
+  Evidence gathered while scoping it, so it need not be re-derived:
+  - Bitbucket **Cloud** does not expose `refs/pull-requests/*` over git —
+    `git ls-remote` on `thecubeee/sheeponline-new` returns only `refs/heads`
+    (210 refs). That namespace is Bitbucket **Server** only.
+  - `development[pullrequests].all > 0` and `development[commits].all > 0` return
+    zero across all 10 projects, and `SN-296` has no remote issue links —
+    consistent with the integration being absent rather than merely unreadable.
+  - The reader endpoint would be Jira's internal
+    `/rest/dev-status/1.0/issue/detail?issueId={numericId}&applicationType=bitbucket&dataType=pullrequest`.
+    It is undocumented, so **whether it authorises under `read:jira-work` via
+    OAuth 2.0 (3LO) must be verified against a live instance** before relying on
+    it. Verification is impossible until the integration is connected.
+
+  Implementation shape when unblocked: an `IPullRequestSource` seam with a
+  `JiraDevStatusPullRequestSource`, one extra entry in `SlackVariables.Catalog`,
+  and nothing else. If the endpoint does not authorise, `{PR_URL}` is simply
+  omitted from the dictionary and renders literally (§6.2) — so the failure mode
+  is already designed for and no existing behaviour changes.
+
+- **Bitbucket PR as the *trigger*** (§2), rather than just the link. Would remove
+  the manual transition, at the cost of an Atlassian API token, a poller, and a
+  `tracked_repo.last_seen_pr_id` watermark. Revisit only if the manual step chafes.
 - **Per-project enable/disable toggle** — currently "no channel" doubles as
   "off". Adequate for now.
 - **Notifying on other transitions** (e.g. -> Done). The pipeline is generic;

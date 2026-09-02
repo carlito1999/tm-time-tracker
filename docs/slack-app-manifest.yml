@@ -1,0 +1,30 @@
+# Slack app manifest for TmTimeTracker.
+#
+# Paste this at https://api.slack.com/apps -> Create New App -> From an app manifest.
+#
+# Only USER scopes are declared, deliberately:
+#   - messages must be authored by you, not a bot;
+#   - a user token already carries your membership of private channels, so nothing
+#     has to be /invite-d anywhere.
+#
+# There is no redirect_urls entry because the app does not run an OAuth flow - you
+# paste the User OAuth Token into Settings once. Slack requires an HTTPS redirect URL
+# and offers no public-client/PKCE flow, so a browser "click Allow" round trip would
+# mean hosting a redirect page for no practical gain on a single-user desktop app.
+
+display_information:
+  name: TmTimeTracker
+  description: Posts a message when a tracked Jira ticket moves to Review
+  background_color: "#2b3137"
+
+oauth_config:
+  scopes:
+    user:
+      - chat:write      # post messages as you
+      - channels:read   # list public channels for the Settings dropdown
+      - groups:read     # list private channels you are a member of
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
