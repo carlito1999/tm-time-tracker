@@ -33,6 +33,8 @@ if (args.Length >= 1 && args[0] == "--login")     { await RunCli(b => b, RunLogi
 if (args.Length == 2 && args[0] == "--probe-jira"){ await RunCli(b => b, h => RunProbe(h, args[1])); return; }
 if (args.Length == 2 && args[0] == "--probe-devstatus")
     { await RunCli(b => b, h => RunDevStatusProbe(h, args[1])); return; }
+if (args.Length == 3 && args[0] == "--set-jira-token")
+    { await RunCli(b => b, h => SetJiraToken(h, args[1], args[2])); return; }
 // The overdue warning cannot fire until the read:dev-info:jira scope is granted, so this is the
 // only way to see a real toast come out of the published exe.
 if (args.Length == 1 && args[0] == "--test-toast")
@@ -214,45 +216,42 @@ static void TryMigrateSecretsJson(IServiceProvider sp)
 
 // Diagnostic: the development-information endpoint is undocumented, so this reports what the
 // app's OAuth token can actually reach - the api.atlassian.com gateway, the site host, or neither.
-static async Task RunDevStatusProbe(IHost host, string issueId)
+static async Task SetJiraToken(IHost host, string email, string token)
 {
-    var coordinator = host.Services.GetRequiredService<OAuthCoordinator>();
-    var (token, cloudId) = await coordinator.GetAccessTokenAsync(CancellationToken.None);
-    var sites = await coordinator.ListAccessibleAsync(CancellationToken.None);
-    var siteUrl = sites.FirstOrDefault(s => s.Id == cloudId)?.Url;
-
-    var query = $"/rest/dev-status/1.0/issue/detail?issueId={issueId}" +
-                "&applicationType=bitbucket&dataType=pullrequest";
-
-    var targets = new List<(string Label, string Url)>
-    {
-        ("gateway  (api.atlassian.com)", $"https://api.atlassian.com/ex/jira/{cloudId}{query}")
-    };
-    if (!string.IsNullOrWhiteSpace(siteUrl))
-        targets.Add(("site host " + siteUrl, $"{siteUrl.TrimEnd('/')}{query}"));
-
-    using var http = new HttpClient();
-    foreach (var (label, url) in targets)
-    {
-        try
-        {
-            var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            var response = await http.SendAsync(request);
-            var body = await response.Content.ReadAsStringAsync();
-
-            Console.WriteLine($"{label} -> {(int)response.StatusCode} {response.StatusCode}");
-            Console.WriteLine("    " + body[..Math.Min(400, body.Length)].ReplaceLineEndings(" "));
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"{label} -> {ex.GetType().Name}: {ex.Message}");
-        }
-        Console.WriteLine();
-    }
+    host.Services.GetRequiredService<JiraApiTokenRepository>().Save(email, token);
+    Console.WriteLine($"Stored Jira API token for {email} (DPAPI-encrypted).");
+    await Task.CompletedTask;
 }
 
+// Exercises the same client the worker uses, so a green probe means the worker will work too.
+static async Task RunDevStatusProbe(IHost host, string issueId)
+{
+    var credential = host.Services.GetRequiredService<JiraApiTokenRepository>().Get();
+    if (credential is null)
+    {
+        Console.Error.WriteLine("No Jira API token stored. Set one with:");
+        Console.Error.WriteLine("  TmTimeTracker.exe --set-jira-token <atlassian-email> <api-token>");
+        Console.Error.WriteLine("Create one at https://id.atlassian.com/manage-profile/security/api-tokens");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    Console.WriteLine($"Using basic auth as {credential.Email}.");
+
+    var snapshot = await host.Services.GetRequiredService<IPullRequestSource>()
+        .GetSnapshotAsync(issueId, CancellationToken.None);
+
+    var lastCommit = snapshot.LastCommitUtc?.ToString("u") ?? "(none)";
+    Console.WriteLine($"last commit: {lastCommit}");
+    if (snapshot.PullRequest is null)
+    {
+        Console.WriteLine("pull request: (none reported)");
+        return;
+    }
+
+    Console.WriteLine($"pull request: {snapshot.PullRequest.Status} - {snapshot.PullRequest.Title}");
+    Console.WriteLine($"         url: {snapshot.PullRequest.Url}");
+}
 static void SeedConfigIfMissing(IHost host)
 {
     using var scope = host.Services.CreateScope();

@@ -29,6 +29,7 @@ public static class HostingExtensions
             services.AddSingleton<SlackChannelRepository>();
             services.AddSingleton<JiraSiteRepository>();
             services.AddSingleton<PrAnnouncementRepository>();
+            services.AddSingleton<JiraApiTokenRepository>();
             // The balloon is only the fallback now, live once the tray icon attaches; a no-op in
             // the headless CLI modes. Toasts work in every mode, tray icon or not.
             services.AddSingleton<TmTimeTracker.UI.TrayBalloonNotifier>();
@@ -104,7 +105,22 @@ public static class HostingExtensions
             });
             services.AddSingleton<IJiraIssueSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
-            services.AddSingleton<IDevStatusSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraSiteResolver>(sp => new JiraSiteResolver(
+                sp.GetRequiredService<JiraSiteRepository>(),
+                sp.GetRequiredService<IAccessibleSiteSource>(),
+                () => sp.GetRequiredService<OAuthStateRepository>().Load()?.CloudId,
+                sp.GetRequiredService<ILogger<JiraSiteResolver>>()));
+
+            // dev-status rejects OAuth tokens whatever their scopes, so it gets its own client on
+            // basic auth rather than sharing JiraApiClient's credential.
+            services.AddSingleton<IDevStatusSource>(sp => new BasicAuthDevStatusClient(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("jira-api"),
+                sp.GetRequiredService<JiraApiTokenRepository>(),
+                sp.GetRequiredService<IJiraSiteResolver>(),
+                sp.GetRequiredService<ILogger<BasicAuthDevStatusClient>>()));
+            services.AddSingleton<IPullRequestSource>(sp => new JiraPullRequestSource(
+                sp.GetRequiredService<IDevStatusSource>(),
+                sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
             services.AddSingleton<LocalCallbackListener>();
         });
         return builder;
@@ -127,16 +143,6 @@ public static class HostingExtensions
                 sp.GetRequiredService<ILogger<SlackApiClient>>()));
 
             services.AddSingleton<ISlackPoster>(sp => sp.GetRequiredService<SlackApiClient>());
-
-            services.AddSingleton<IJiraSiteResolver>(sp => new JiraSiteResolver(
-                sp.GetRequiredService<JiraSiteRepository>(),
-                sp.GetRequiredService<IAccessibleSiteSource>(),
-                () => sp.GetRequiredService<OAuthStateRepository>().Load()?.CloudId,
-                sp.GetRequiredService<ILogger<JiraSiteResolver>>()));
-
-            services.AddSingleton<IPullRequestSource>(sp => new JiraPullRequestSource(
-                sp.GetRequiredService<IDevStatusSource>(),
-                sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
 
             services.AddHostedService<PrAnnouncementWorker>();
         });

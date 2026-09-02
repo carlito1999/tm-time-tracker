@@ -97,3 +97,11 @@ CREATE TABLE IF NOT EXISTS pr_announcement (
     pr_url       TEXT,
     warned_at    TEXT
 );
+
+-- Basic-auth credential for Jira's internal dev-status API, which does not accept the OAuth
+-- token: email plus an Atlassian API token, encrypted with the same DPAPI protector.
+CREATE TABLE IF NOT EXISTS jira_api_token (
+    id          INTEGER PRIMARY KEY CHECK(id = 1),
+    email       TEXT NOT NULL,
+    token_dpapi BLOB NOT NULL
+);

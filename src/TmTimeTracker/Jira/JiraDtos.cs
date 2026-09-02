@@ -43,7 +43,10 @@ public sealed record Issue(
 
 // Shape of /rest/dev-status/1.0/issue/detail?applicationType=bitbucket&dataType=pullrequest
 public sealed record DevStatusResponse(
-    [property: JsonPropertyName("detail")] DevStatusDetail[]? Detail);
+    [property: JsonPropertyName("detail")] DevStatusDetail[]? Detail)
+{
+    public static readonly DevStatusResponse Empty = new((DevStatusDetail[]?)null);
+}
 
 public sealed record DevStatusDetail(
     [property: JsonPropertyName("pullRequests")] DevStatusPullRequest[]? PullRequests,
