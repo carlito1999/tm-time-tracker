@@ -44,14 +44,17 @@ public sealed class SlackPage : UserControl
             Margin = new Padding(0, 0, 8, 0)
         };
 
-        _saveTokenBtn = new FlatButton { Text = "Save & test", Width = 120, Kind = ButtonKind.Accent };
+        // "Save and test", not "Save & test": FlatButton draws via TextRenderer.DrawText without
+        // TextFormatFlags.NoPrefix, so an ampersand is eaten as a mnemonic and renders "Save _test".
+        _saveTokenBtn = new FlatButton { Text = "Save and test", Width = 120, Kind = ButtonKind.Accent };
         _saveTokenBtn.Click += async (_, _) => await SaveAndTestTokenAsync();
 
         _connectionStatus = new Label
         {
-            Text = "Not connected",
+            Text = "Not connected — paste a Slack user token (xoxp-) above, then Save and test.",
             Font = Theme.Body,
             ForeColor = Theme.TextSecondary,
+            Dock = DockStyle.Top,
             AutoSize = true,
             Padding = new Padding(16, 6, 16, 12)
         };
@@ -67,11 +70,14 @@ public sealed class SlackPage : UserControl
         tokenRow.Controls.Add(_tokenBox);
         tokenRow.Controls.Add(_saveTokenBtn);
 
+        // Every child here must be Dock = Top. An undocked AutoSize label sits at (0, 0) and
+        // paints over the docked heading above it instead of stacking below it.
         _projectsEmpty = new Label
         {
-            Text = "Connect Slack to choose channels.",
+            Text = "Connect Slack above to choose channels.",
             Font = Theme.Body,
             ForeColor = Theme.TextSecondary,
+            Dock = DockStyle.Top,
             AutoSize = true,
             Padding = new Padding(16, 4, 16, 8)
         };
@@ -92,6 +98,13 @@ public sealed class SlackPage : UserControl
         Controls.Add(BuildVariablesPanel());
         Controls.Add(_connectionStatus);
         Controls.Add(tokenRow);
+        Controls.Add(MakeHint(
+            "There is no Connect button: Slack requires an HTTPS redirect URL, so this app uses a "
+            + "pasted token instead of a browser flow."));
+        Controls.Add(MakeHint(
+            "1. api.slack.com/apps -> Create New App -> From an app manifest -> paste "
+            + "docs/slack-app-manifest.yml    2. Install to Workspace    "
+            + "3. OAuth & Permissions -> copy the User OAuth Token (xoxp-)"));
         Controls.Add(MakeHeading("Slack connection"));
 
         Load += async (_, _) => await InitialiseAsync();
@@ -415,6 +428,16 @@ public sealed class SlackPage : UserControl
         _connectionStatus.Text = text;
         _connectionStatus.ForeColor = color;
     }
+
+    private static Label MakeHint(string text) => new()
+    {
+        Text = text,
+        Font = Theme.Body,
+        ForeColor = Theme.TextSecondary,
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        Padding = new Padding(16, 0, 16, 4)
+    };
 
     private static Label MakeHeading(string text) => new()
     {
