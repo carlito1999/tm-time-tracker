@@ -323,10 +323,23 @@ Unit tests only; nothing touches the network.
   be better, but it must not wire the save handlers — with an empty channel list
   a saved mapping would resolve to index 0 and the first interaction would delete
   it. Deliberately deferred rather than half-fixed.
-- **UI not yet smoke-tested.** Tasks 1-10 are unit-tested; `SlackPage` is
-  WinForms composition and was verified only by compilation. `AutoScroll` over
-  `Dock = Top` children is a known WinForms trap and should be checked on a real
-  run before this is relied on.
+- ~~**UI not yet smoke-tested.**~~ **Done 2026-09-02.** The first real run found
+  exactly the predicted class of bug: `_connectionStatus` and `_projectsEmpty`
+  had `AutoSize` but no `Dock`, so they sat at (0, 0) and painted over the
+  "Slack connection" heading — hiding the only text that explained the token
+  box. `FlatButton` also ate the ampersand in "Save & test" (it draws through
+  `TextRenderer.DrawText` without `TextFormatFlags.NoPrefix`). Both fixed.
+  End-to-end verified: token pasted, connection established, message posted.
+
+  **Slack install gotcha, recorded so it is not re-diagnosed.** The app-creation
+  wizard's "Create and Install" opens the consent page in a `window.open` popup.
+  That page redirects `slack.com/oauth/v2/authorize` -> `<team>.slack.com/oauth`,
+  a cross-subdomain hop carrying the Slack session cookie, which popups abort
+  under strict third-party-cookie or popup-blocking settings. The symptom is a
+  window that flashes and closes with only "Installation was not completed."
+  Fix: open the same authorize URL as a normal top-level tab from
+  **Install App -> Install to \<workspace\>**; it succeeds first time. Nothing to
+  do with scopes, the manifest, or admin approval.
 - **Notifying on other transitions** (e.g. -> Done). The pipeline is generic;
   only the guard in §6.5 restricts it. Widening is a config change, not a
   redesign.
