@@ -237,6 +237,19 @@ Done ✅ {TICKET} — {SUMMARY}
 | `{MINUTES}` | Tracked minutes | `137` |
 | `{HOURS}` | Tracked time | `2h 17m` |
 | `{DATE}` | Local date and time | `2026-09-02 14:31` |
+| `{PR_URL}` | Link to the pull request | `https://bitbucket.org/acme/web/pull-requests/360` |
+| `{PR_TITLE}` | Pull request title | `SN-296-372: enhance Tolgee caching` |
+| `{PR_STATUS}` | Pull request state | `OPEN` |
+
+The three `PR_*` variables need **Bitbucket connected to Jira** (Jira → Settings
+→ Apps → Bitbucket). That is a product-to-product link, not a credential this app
+holds — the pull request is read with the Jira token you already authorised, and
+no Bitbucket login is stored anywhere. Until it is connected, or on a ticket with
+no pull request, those placeholders render literally and the message still sends.
+
+When a ticket has several pull requests, an `OPEN` one always wins over a merged
+or declined one, and the most recently updated wins within that group — so a
+reworked ticket links to the live pull request rather than to last month's.
 
 An unknown placeholder is left exactly as you typed it, so `{TIKCET}` shows up
 as a visible typo rather than silently vanishing. The live preview under each

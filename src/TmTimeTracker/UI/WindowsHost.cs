@@ -109,10 +109,14 @@ public sealed class WindowsHost
         Marshal(() =>
         {
             if (_dashboard is null || _dashboard.IsDisposed)
+            {
                 _dashboard = new DashboardWindow(
                     _bus, _tickets, _oauthState, _entries, _config,
                     _clock, _claudeProbe, _resolver, _api,
                     _logFactory.CreateLogger<DashboardWindow>());
+                // Subscribed once at construction, not per Show, or the handler would stack up.
+                _dashboard.SettingsRequested += ShowSettings;
+            }
             _dashboard.ShowAndSubscribe();
         });
     }

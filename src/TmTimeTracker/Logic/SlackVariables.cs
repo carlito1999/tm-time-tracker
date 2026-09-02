@@ -24,6 +24,9 @@ public static class SlackVariables
         new SlackVariable("MINUTES", "Tracked minutes",     "137"),
         new SlackVariable("HOURS",   "Tracked time",        "2h 17m"),
         new SlackVariable("DATE",    "Local date and time", "2026-09-02 14:31"),
+        new SlackVariable("PR_URL",    "Link to the pull request", "https://bitbucket.org/acme/web/pull-requests/360"),
+        new SlackVariable("PR_TITLE",  "Pull request title",       "SN-296-372: enhance Tolgee caching"),
+        new SlackVariable("PR_STATUS", "Pull request state",       "OPEN"),
     };
 
     /// <summary>
@@ -32,7 +35,8 @@ public static class SlackVariables
     /// </summary>
     public static IReadOnlyDictionary<string, string> Build(
         string ticketKey, string? summary, string fromStatus, string toStatus,
-        int minutesActive, DateTime atUtc, string? siteUrl)
+        int minutesActive, DateTime atUtc, string? siteUrl,
+        string? prUrl = null, string? prTitle = null, string? prStatus = null)
     {
         var vars = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -51,6 +55,12 @@ public static class SlackVariables
 
         if (!string.IsNullOrWhiteSpace(siteUrl))
             vars["URL"] = $"{siteUrl.TrimEnd('/')}/browse/{ticketKey}";
+
+        // Omitted rather than blanked when no pull request is known, so the template shows a
+        // literal {PR_URL} and the reader can tell the link is missing rather than absent by design.
+        if (!string.IsNullOrWhiteSpace(prUrl)) vars["PR_URL"] = prUrl;
+        if (!string.IsNullOrWhiteSpace(prTitle)) vars["PR_TITLE"] = prTitle;
+        if (!string.IsNullOrWhiteSpace(prStatus)) vars["PR_STATUS"] = prStatus;
 
         return vars;
     }

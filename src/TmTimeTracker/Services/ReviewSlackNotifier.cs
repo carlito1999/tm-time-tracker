@@ -18,12 +18,15 @@ public sealed class ReviewSlackNotifier : BackgroundService
     private readonly SlackChannelRepository _channels;
     private readonly ISlackPoster _slack;
     private readonly IJiraSiteResolver _site;
+    private readonly IPullRequestSource _pullRequests;
     private readonly ILogger<ReviewSlackNotifier> _log;
 
     public ReviewSlackNotifier(IEventBus bus, SlackChannelRepository channels,
-        ISlackPoster slack, IJiraSiteResolver site, ILogger<ReviewSlackNotifier> log)
+        ISlackPoster slack, IJiraSiteResolver site, IPullRequestSource pullRequests,
+        ILogger<ReviewSlackNotifier> log)
     {
-        _bus = bus; _channels = channels; _slack = slack; _site = site; _log = log;
+        _bus = bus; _channels = channels; _slack = slack; _site = site;
+        _pullRequests = pullRequests; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -54,8 +57,11 @@ public sealed class ReviewSlackNotifier : BackgroundService
             }
 
             var siteUrl = await _site.GetSiteUrlAsync(ct).ConfigureAwait(false);
+            var pullRequest = await _pullRequests.GetBestAsync(evt.IssueId, ct).ConfigureAwait(false);
+
             var variables = SlackVariables.Build(evt.TicketKey, evt.Summary,
-                evt.FromStatus, evt.ToStatus, evt.MinutesActive, evt.AtUtc, siteUrl);
+                evt.FromStatus, evt.ToStatus, evt.MinutesActive, evt.AtUtc, siteUrl,
+                pullRequest?.Url, pullRequest?.Title, pullRequest?.Status);
             var text = MessageTemplateRenderer.Render(mapping.MessageTemplate, variables);
 
             await _slack.PostMessageAsync(mapping.ChannelId, text, ct).ConfigureAwait(false);

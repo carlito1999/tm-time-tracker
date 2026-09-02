@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace TmTimeTracker.Jira;
 
-public sealed class JiraApiClient : IJiraIssueSource
+public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource
 {
     private const string DefaultApiBase = "https://api.atlassian.com/ex/jira";
     private readonly HttpClient _http;
@@ -27,6 +27,26 @@ public sealed class JiraApiClient : IJiraIssueSource
             content: null, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<Issue>(cancellationToken: ct).ConfigureAwait(false))!;
+    }
+
+    /// <summary>
+    /// Development information (Bitbucket pull requests) linked to an issue.
+    ///
+    /// This is Jira's internal dev-status API, not the documented REST v3 surface: it is what the
+    /// issue view's Development panel calls, it keys on the NUMERIC issue id rather than the key,
+    /// and it carries no published scope contract. Callers must treat failure as "no PR known"
+    /// rather than an error.
+    /// </summary>
+    public async Task<DevStatusResponse> GetPullRequestDetailAsync(string issueId, CancellationToken ct)
+    {
+        var (resp, _) = await SendAsync(HttpMethod.Get,
+            cloudId => $"{_apiBase}/{cloudId}/rest/dev-status/1.0/issue/detail" +
+                       $"?issueId={Uri.EscapeDataString(issueId)}" +
+                       "&applicationType=bitbucket&dataType=pullrequest",
+            content: null, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        return (await resp.Content.ReadFromJsonAsync<DevStatusResponse>(cancellationToken: ct)
+                                  .ConfigureAwait(false))!;
     }
 
     public async Task<IReadOnlyList<JiraProject>> ListProjectsAsync(CancellationToken ct)

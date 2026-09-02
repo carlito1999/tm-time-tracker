@@ -7,9 +7,14 @@ namespace TmTimeTracker.Tests.Logic;
 public class SlackVariablesTests
 {
     private static IReadOnlyDictionary<string, string> Build(
-        string? summary = "Fix Tolgee warning", string? siteUrl = "https://tcubeee.atlassian.net") =>
+        string? summary = "Fix Tolgee warning",
+        string? siteUrl = "https://tcubeee.atlassian.net",
+        string? prUrl = "https://bitbucket.org/acme/web/pull-requests/360",
+        string? prTitle = "SN-296-372: enhance Tolgee caching",
+        string? prStatus = "OPEN") =>
         SlackVariables.Build("SN-296", summary, "In Progress", "Review", 137,
-            new DateTime(2026, 9, 2, 11, 31, 0, DateTimeKind.Utc), siteUrl);
+            new DateTime(2026, 9, 2, 11, 31, 0, DateTimeKind.Utc), siteUrl,
+            prUrl, prTitle, prStatus);
 
     [Fact]
     public void Populates_every_variable_when_all_data_is_present()
@@ -35,6 +40,24 @@ public class SlackVariablesTests
     public void Omits_summary_when_blank()
     {
         Build(summary: "  ").ContainsKey("SUMMARY").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Populates_pull_request_variables()
+    {
+        var v = Build();
+        v["PR_URL"].Should().Be("https://bitbucket.org/acme/web/pull-requests/360");
+        v["PR_TITLE"].Should().Be("SN-296-372: enhance Tolgee caching");
+        v["PR_STATUS"].Should().Be("OPEN");
+    }
+
+    [Fact]
+    public void Omits_pull_request_variables_when_no_pr_is_linked()
+    {
+        var v = Build(prUrl: null, prTitle: null, prStatus: null);
+        v.ContainsKey("PR_URL").Should().BeFalse();
+        v.ContainsKey("PR_TITLE").Should().BeFalse();
+        v.ContainsKey("PR_STATUS").Should().BeFalse();
     }
 
     [Fact]

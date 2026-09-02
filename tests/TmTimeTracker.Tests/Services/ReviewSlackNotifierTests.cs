@@ -13,12 +13,13 @@ public class ReviewSlackNotifierTests
 {
     private static JiraStatusTransition Event(string ticket = "SN-296", string? summary = "Fix Tolgee warning") =>
         new(ticket, summary, "In Progress", "Review", 137,
-            new DateTime(2026, 9, 2, 11, 31, 0, DateTimeKind.Utc));
+            new DateTime(2026, 9, 2, 11, 31, 0, DateTimeKind.Utc), IssueId: "28814");
 
     private static (ReviewSlackNotifier Notifier, Mock<ISlackPoster> Poster) Build(
         string? siteUrl = "https://tcubeee.atlassian.net",
         bool configured = true,
-        string template = "Done {TICKET} {HOURS} {URL}")
+        string template = "Done {TICKET} {HOURS} {URL}",
+        PullRequestInfo? pullRequest = null)
     {
         var factory = SharedSqlite.NewInMemory();
         new DatabaseInitializer(factory).EnsureCreated();
@@ -31,9 +32,13 @@ public class ReviewSlackNotifierTests
         var resolver = new Mock<IJiraSiteResolver>();
         resolver.Setup(r => r.GetSiteUrlAsync(It.IsAny<CancellationToken>())).ReturnsAsync(siteUrl);
 
+        var pullRequests = new Mock<IPullRequestSource>();
+        pullRequests.Setup(p => p.GetBestAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(pullRequest);
+
         var notifier = new ReviewSlackNotifier(
             new Mock<IEventBus>().Object, channels, poster.Object, resolver.Object,
-            NullLogger<ReviewSlackNotifier>.Instance);
+            pullRequests.Object, NullLogger<ReviewSlackNotifier>.Instance);
 
         return (notifier, poster);
     }
@@ -105,6 +110,36 @@ public class ReviewSlackNotifierTests
 
         poster.Verify(p => p.PostMessageAsync(It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Substitutes_pull_request_variables_when_a_pr_is_linked()
+    {
+        var (notifier, poster) = Build(
+            template: "{TICKET} {PR_STATUS} {PR_TITLE} {PR_URL}",
+            pullRequest: new PullRequestInfo(
+                "https://bitbucket.org/thecubeee/sheeponline-new/pull-requests/360",
+                "SN-296-372: enhance Tolgee caching", "OPEN"));
+
+        await notifier.HandleAsync(Event(), CancellationToken.None);
+
+        poster.Verify(p => p.PostMessageAsync("C1",
+            "SN-296 OPEN SN-296-372: enhance Tolgee caching " +
+            "https://bitbucket.org/thecubeee/sheeponline-new/pull-requests/360",
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // The dev-status endpoint is undocumented, so "no PR" must be an ordinary outcome:
+    // the message still sends and the placeholder stays visible.
+    [Fact]
+    public async Task Leaves_pr_placeholders_literal_when_no_pull_request_is_linked()
+    {
+        var (notifier, poster) = Build(template: "{TICKET} {PR_URL}", pullRequest: null);
+
+        await notifier.HandleAsync(Event(), CancellationToken.None);
+
+        poster.Verify(p => p.PostMessageAsync("C1", "SN-296 {PR_URL}",
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // Notifications are a side-channel and must never disturb time tracking.

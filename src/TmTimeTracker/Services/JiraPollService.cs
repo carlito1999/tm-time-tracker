@@ -66,7 +66,8 @@ public sealed class JiraPollService : BackgroundService
                             previous,
                             issue.Fields.Status.Name,
                             cycle.MinutesActive,
-                            nowUtc),
+                            nowUtc,
+                            issue.Id),
                         ct).ConfigureAwait(false);
                 }
             }

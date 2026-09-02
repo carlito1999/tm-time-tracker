@@ -16,3 +16,13 @@ public interface IAccessibleSiteSource
 {
     Task<IReadOnlyList<AtlassianResource>> ListAccessibleAsync(CancellationToken ct);
 }
+
+/// <summary>
+/// Seam over Jira's development-information lookup, so pull-request handling can be unit tested
+/// without HTTP. Kept separate from IJiraIssueSource because this endpoint is internal and
+/// unversioned - isolating it keeps the blast radius small if Atlassian changes it.
+/// </summary>
+public interface IDevStatusSource
+{
+    Task<DevStatusResponse> GetPullRequestDetailAsync(string issueId, CancellationToken ct);
+}

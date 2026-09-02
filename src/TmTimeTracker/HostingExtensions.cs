@@ -98,6 +98,7 @@ public static class HostingExtensions
             });
             services.AddSingleton<IJiraIssueSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
+            services.AddSingleton<IDevStatusSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<LocalCallbackListener>();
         });
         return builder;
@@ -126,6 +127,10 @@ public static class HostingExtensions
                 sp.GetRequiredService<IAccessibleSiteSource>(),
                 () => sp.GetRequiredService<OAuthStateRepository>().Load()?.CloudId,
                 sp.GetRequiredService<ILogger<JiraSiteResolver>>()));
+
+            services.AddSingleton<IPullRequestSource>(sp => new JiraPullRequestSource(
+                sp.GetRequiredService<IDevStatusSource>(),
+                sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
 
             services.AddHostedService<ReviewSlackNotifier>();
         });
