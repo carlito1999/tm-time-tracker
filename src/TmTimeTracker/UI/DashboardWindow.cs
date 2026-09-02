@@ -37,6 +37,13 @@ public sealed class DashboardWindow : Form
     private readonly LinkedList<DomainEvent> _eventBuffer = new();
     private CancellationTokenSource? _subscriptionCts;
 
+    /// <summary>
+    /// Raised when the user clicks Settings. An event rather than a direct call because
+    /// WindowsHost owns window lifetimes and constructs this form - calling it from here would
+    /// make the dependency circular.
+    /// </summary>
+    public event Action? SettingsRequested;
+
     public DashboardWindow(
         IEventBus bus,
         TicketTimeRepository tickets,
@@ -162,6 +169,13 @@ public sealed class DashboardWindow : Form
             b.Margin = new Padding(0, 0, 8, 0);
             actionsFlow.Controls.Add(b);
         }
+
+        // Separated by a wider left margin: the three above act on the selected worklog,
+        // this one acts on the app, and they should not read as one group.
+        var settings = new FlatButton { Text = "⚙  Settings", Width = 130 };
+        settings.Click += (_, _) => SettingsRequested?.Invoke();
+        settings.Margin = new Padding(28, 0, 0, 0);
+        actionsFlow.Controls.Add(settings);
 
         var activityHeading = MakeHeading("Recent activity");
         _filter = new ComboBox

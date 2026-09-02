@@ -6,6 +6,7 @@ using TmTimeTracker.Data;
 using TmTimeTracker.Jira;
 using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
+using TmTimeTracker.Slack;
 
 namespace TmTimeTracker;
 
@@ -25,6 +26,8 @@ public static class HostingExtensions
             services.AddSingleton<OAuthStateRepository>();
             services.AddSingleton<OAuthAppConfigRepository>();
             services.AddSingleton<TrackedRepoRepository>();
+            services.AddSingleton<SlackChannelRepository>();
+            services.AddSingleton<JiraSiteRepository>();
             services.AddSingleton<MinuteSampleRepository>();
             services.AddSingleton<IClock, SystemClock>();
             services.AddSingleton<IEventBus, EventBus>();
@@ -93,7 +96,43 @@ public static class HostingExtensions
                 var log = sp.GetRequiredService<ILogger<JiraApiClient>>();
                 return new JiraApiClient(http, tokens, log);
             });
+            services.AddSingleton<IJiraIssueSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
+            services.AddSingleton<IDevStatusSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<LocalCallbackListener>();
+        });
+        return builder;
+    }
+
+    public static IHostBuilder AddSlackServices(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(sp => new SlackCredentialRepository(
+                sp.GetRequiredService<ISqliteConnectionFactory>(),
+                sp.GetRequiredService<ITokenProtector>()));
+
+            services.AddSingleton<ISlackTokenSource>(sp =>
+                new RepositorySlackTokenSource(sp.GetRequiredService<SlackCredentialRepository>()));
+
+            services.AddSingleton(sp => new SlackApiClient(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("slack-api"),
+                sp.GetRequiredService<ISlackTokenSource>(),
+                sp.GetRequiredService<ILogger<SlackApiClient>>()));
+
+            services.AddSingleton<ISlackPoster>(sp => sp.GetRequiredService<SlackApiClient>());
+
+            services.AddSingleton<IJiraSiteResolver>(sp => new JiraSiteResolver(
+                sp.GetRequiredService<JiraSiteRepository>(),
+                sp.GetRequiredService<IAccessibleSiteSource>(),
+                () => sp.GetRequiredService<OAuthStateRepository>().Load()?.CloudId,
+                sp.GetRequiredService<ILogger<JiraSiteResolver>>()));
+
+            services.AddSingleton<IPullRequestSource>(sp => new JiraPullRequestSource(
+                sp.GetRequiredService<IDevStatusSource>(),
+                sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
+
+            services.AddHostedService<ReviewSlackNotifier>();
         });
         return builder;
     }

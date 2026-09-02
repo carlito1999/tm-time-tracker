@@ -76,13 +76,19 @@ public sealed class TrayIconHost : BackgroundService
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => _lifetime.StopApplication());
 
-        return new NotifyIcon
+        var icon = new NotifyIcon
         {
             Visible = true,
             Text = "TmTimeTracker",
             Icon = AppIcon.Load(SystemInformation.SmallIconSize),
             ContextMenuStrip = menu
         };
+
+        // Double-click is the Windows convention for opening a tray app's primary window,
+        // and saves right-clicking through the menu for the thing opened most often.
+        icon.DoubleClick += (_, _) => host.ShowDashboard();
+
+        return icon;
     }
 
     private void PromptForWorklog(string ticketKey)

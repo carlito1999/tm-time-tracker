@@ -64,3 +64,21 @@ CREATE TABLE IF NOT EXISTS tracked_repo (
     path       TEXT NOT NULL UNIQUE COLLATE NOCASE,
     sort_order INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS slack_credential (
+    id          INTEGER PRIMARY KEY CHECK(id = 1),
+    token_dpapi BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS slack_channel (
+    project_key      TEXT PRIMARY KEY,
+    channel_id       TEXT NOT NULL,
+    channel_name     TEXT NOT NULL,
+    message_template TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jira_site (
+    id       INTEGER PRIMARY KEY CHECK(id = 1),
+    cloud_id TEXT NOT NULL,
+    site_url TEXT NOT NULL
+);

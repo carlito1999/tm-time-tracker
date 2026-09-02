@@ -22,12 +22,46 @@ public sealed record StatusCategory(
     [property: JsonPropertyName("key")] string Key,
     [property: JsonPropertyName("name")] string Name);
 
+// Summary is optional with a default so existing construction sites keep compiling.
 public sealed record IssueFields(
-    [property: JsonPropertyName("status")] IssueStatus Status);
+    [property: JsonPropertyName("status")] IssueStatus Status,
+    [property: JsonPropertyName("summary")] string? Summary = null);
 
+public sealed record JiraProject(
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("name")] string Name);
+
+public sealed record JiraProjectPage(
+    [property: JsonPropertyName("values")] JiraProject[] Values);
+
+// Id is optional and last so existing construction sites keep compiling. It is needed because
+// the development-information endpoint keys on the numeric issue id, not the issue key.
 public sealed record Issue(
     [property: JsonPropertyName("key")] string Key,
-    [property: JsonPropertyName("fields")] IssueFields Fields);
+    [property: JsonPropertyName("fields")] IssueFields Fields,
+    [property: JsonPropertyName("id")] string? Id = null);
+
+// Shape of /rest/dev-status/1.0/issue/detail?applicationType=bitbucket&dataType=pullrequest
+public sealed record DevStatusResponse(
+    [property: JsonPropertyName("detail")] DevStatusDetail[]? Detail);
+
+public sealed record DevStatusDetail(
+    [property: JsonPropertyName("pullRequests")] DevStatusPullRequest[]? PullRequests,
+    [property: JsonPropertyName("branches")] DevStatusBranch[]? Branches);
+
+public sealed record DevStatusBranch(
+    [property: JsonPropertyName("lastCommit")] DevStatusCommit? LastCommit);
+
+public sealed record DevStatusCommit(
+    [property: JsonPropertyName("url")] string? Url);
+
+public sealed record DevStatusPullRequest(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("status")] string? Status,
+    [property: JsonPropertyName("url")] string? Url,
+    [property: JsonPropertyName("repositoryName")] string? RepositoryName,
+    [property: JsonPropertyName("lastUpdate")] string? LastUpdate);
 
 public sealed record WorklogRequest(
     [property: JsonPropertyName("timeSpentSeconds")] int TimeSpentSeconds,

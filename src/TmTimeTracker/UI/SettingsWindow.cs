@@ -15,11 +15,13 @@ public sealed class SettingsWindow : Form
     private readonly FlatButton _tabConnection;
     private readonly FlatButton _tabRepositories;
     private readonly FlatButton _tabOAuthApp;
+    private readonly FlatButton _tabSlack;
     private readonly Panel _content;
 
     private readonly Lazy<Control> _connectionPage;
     private readonly Lazy<Control> _oauthAppPage;
     private readonly Lazy<Control> _repositoriesPage;
+    private readonly Lazy<Control> _slackPage;
 
     private FlatButton _activeTab;
 
@@ -37,13 +39,16 @@ public sealed class SettingsWindow : Form
         _connectionPage   = new Lazy<Control>(() => new ConnectionPage(_sp, _log));
         _oauthAppPage     = new Lazy<Control>(BuildOAuthAppTab);
         _repositoriesPage = new Lazy<Control>(BuildRepositoriesTab);
+        _slackPage        = new Lazy<Control>(() => new SlackPage(_sp, _log));
 
         _tabConnection   = MakeTabButton("Connection");
         _tabRepositories = MakeTabButton("Repositories");
         _tabOAuthApp     = MakeTabButton("OAuth app");
+        _tabSlack        = MakeTabButton("Slack");
         _tabConnection.Click   += (_, _) => Activate(_tabConnection,   _connectionPage.Value);
         _tabRepositories.Click += (_, _) => Activate(_tabRepositories, _repositoriesPage.Value);
         _tabOAuthApp.Click     += (_, _) => Activate(_tabOAuthApp,     _oauthAppPage.Value);
+        _tabSlack.Click        += (_, _) => Activate(_tabSlack,        _slackPage.Value);
 
         var tabBar = new FlowLayoutPanel
         {
@@ -53,7 +58,7 @@ public sealed class SettingsWindow : Form
             WrapContents = false,
             Padding = new Padding(12, 12, 12, 4)
         };
-        foreach (var t in new[] { _tabConnection, _tabRepositories, _tabOAuthApp })
+        foreach (var t in new[] { _tabConnection, _tabRepositories, _tabSlack, _tabOAuthApp })
         {
             t.Margin = new Padding(0, 0, 8, 0);
             tabBar.Controls.Add(t);

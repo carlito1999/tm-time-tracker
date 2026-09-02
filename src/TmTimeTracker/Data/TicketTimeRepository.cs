@@ -60,6 +60,17 @@ public sealed class TicketTimeRepository
             .Select(r => r.ToCycle()).ToList();
     }
 
+    /// <summary>
+    /// Every ticket key ever tracked. Settings derives the project list from this so the user
+    /// never types a project key by hand.
+    /// </summary>
+    public IReadOnlyList<string> GetDistinctTicketKeys()
+    {
+        using var conn = _factory.Open();
+        return conn.Query<string>(
+            "SELECT DISTINCT ticket_key FROM ticket_time ORDER BY ticket_key").ToList();
+    }
+
     public void MarkSubmitted(long cycleId, string worklogId, int submittedMinutes, DateTime submittedAtUtc)
     {
         using var conn = _factory.Open();
