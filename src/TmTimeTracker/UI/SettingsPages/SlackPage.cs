@@ -223,6 +223,13 @@ public sealed class SlackPage : UserControl
             Location = new Point(12, 10)
         };
 
+        // A saved channel that is no longer in the fetched list (archived, renamed, or left)
+        // is kept as an option. Without this it would fall back to index 0 and the next
+        // interaction would call Remove(), silently deleting the user's configuration.
+        var options = new List<SlackConversation>(_channels);
+        if (saved is not null && !options.Any(c => c.Id == saved.ChannelId))
+            options.Add(new SlackConversation(saved.ChannelId, saved.ChannelName));
+
         var channelBox = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
@@ -234,12 +241,12 @@ public sealed class SlackPage : UserControl
             Location = new Point(12, 40)
         };
         channelBox.Items.Add("(no channel - do not notify)");
-        foreach (var channel in _channels) channelBox.Items.Add("#" + channel.Name);
+        foreach (var channel in options) channelBox.Items.Add("#" + channel.Name);
 
         var selected = saved is null
             ? ChannelSuggester.Suggest(
                 projectNames.TryGetValue(project, out var n) ? n : project,
-                _channels.Select(c => c.Name))
+                options.Select(c => c.Name))
             : saved.ChannelName;
         channelBox.SelectedIndex = selected is null
             ? 0
@@ -290,7 +297,7 @@ public sealed class SlackPage : UserControl
         string? SelectedChannelId() =>
             channelBox.SelectedIndex <= 0
                 ? null
-                : _channels[channelBox.SelectedIndex - 1].Id;
+                : options[channelBox.SelectedIndex - 1].Id;
 
         void Save()
         {
@@ -302,7 +309,7 @@ public sealed class SlackPage : UserControl
                 return;
             }
 
-            var channel = _channels[index - 1];
+            var channel = options[index - 1];
             repo.Upsert(new SlackChannelMapping(project, channel.Id, channel.Name, templateBox.Text));
             suggestionHint.Text = "saved";
         }

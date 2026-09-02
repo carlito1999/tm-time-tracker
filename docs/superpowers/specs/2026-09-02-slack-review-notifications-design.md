@@ -316,6 +316,17 @@ Unit tests only; nothing touches the network.
   `tracked_repo.last_seen_pr_id` watermark. Revisit only if the manual step chafes.
 - **Per-project enable/disable toggle** — currently "no channel" doubles as
   "off". Adequate for now.
+- **Settings shows no project cards when Slack is unreachable at page load.**
+  `RefreshConnectionAsync` builds the cards only after a successful `auth.test`,
+  so a transient outage makes the page look empty and could read as "my
+  configuration was lost". Rendering saved mappings read-only in that case would
+  be better, but it must not wire the save handlers — with an empty channel list
+  a saved mapping would resolve to index 0 and the first interaction would delete
+  it. Deliberately deferred rather than half-fixed.
+- **UI not yet smoke-tested.** Tasks 1-10 are unit-tested; `SlackPage` is
+  WinForms composition and was verified only by compilation. `AutoScroll` over
+  `Dock = Top` children is a known WinForms trap and should be checked on a real
+  run before this is relied on.
 - **Notifying on other transitions** (e.g. -> Done). The pipeline is generic;
   only the guard in §6.5 restricts it. Widening is a config change, not a
   redesign.
