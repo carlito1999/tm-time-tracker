@@ -14,6 +14,14 @@
     <EmbeddedResource Include="..\..\assets\app.ico" LogicalName="TmTimeTracker.app.ico" />
   </ItemGroup>
 
+  <!-- Lets tests drive one poll/notify cycle directly instead of waiting on a timer,
+       without widening the public surface of the hosted services. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>TmTimeTracker.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />

@@ -60,7 +60,13 @@ public sealed class JiraPollService : BackgroundService
                 if (issue.Fields.Status.Name == transitionTo && previous != transitionTo)
                 {
                     await _bus.PublishAsync(
-                        new JiraStatusTransition(cycle.TicketKey, previous, issue.Fields.Status.Name, nowUtc),
+                        new JiraStatusTransition(
+                            cycle.TicketKey,
+                            issue.Fields.Summary,
+                            previous,
+                            issue.Fields.Status.Name,
+                            cycle.MinutesActive,
+                            nowUtc),
                         ct).ConfigureAwait(false);
                 }
             }
