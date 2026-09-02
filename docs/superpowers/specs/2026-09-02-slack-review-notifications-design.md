@@ -147,6 +147,13 @@ Scan for `\{[A-Z_]+\}`. Replace a match when the key exists in the dictionary;
 otherwise leave the literal text untouched. Single pass — replacement output is
 never re-scanned, so a summary containing `{TICKET}` cannot inject.
 
+**`SlackVariables` omits keys whose value is unavailable** rather than mapping
+them to an empty string. This is what makes §6.6's fallback work: an unresolved
+site URL leaves `{URL}` *absent from the dictionary*, so it renders literally
+and the reader can see something is misconfigured. Mapping it to `""` would
+instead emit a silent blank line, which looks like a formatting bug rather than
+a missing setting.
+
 ### 6.3 Available variables
 
 | Variable | Source | Example |
@@ -191,6 +198,11 @@ To make step 3 near-zero the app **bootstraps the grid itself**:
   so `SheepOnline New` matches `sheeponline`. A suggestion is **never saved
   without the user confirming it** — it only pre-selects the dropdown.
 - Templates are pre-filled with the default.
+
+**The per-row [Send test message] button posts to the real channel**, where
+teammates will see it. It must therefore render with obviously-sample values and
+a visible test marker (`🧪 Test from TmTimeTracker — …`), never a plausible
+`Done ✅ SN-296` that someone might act on.
 
 ### 6.5 Notify pipeline
 
