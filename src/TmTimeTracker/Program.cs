@@ -11,12 +11,43 @@ using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
 using TmTimeTracker.UI;
 
+// Clicking a toast COM-activates this exe. There is no single-instance mutex, so without this
+// guard a click would start a second daemon alongside the running one.
+if (Microsoft.Toolkit.Uwp.Notifications.ToastNotificationManagerCompat.WasCurrentProcessToastActivated())
+    return;
+
 AppPaths.EnsureExists();
 
 if (args.Length >= 1 && args[0] == "--login")     { await RunCli(b => b, RunLogin); return; }
 if (args.Length == 2 && args[0] == "--probe-jira"){ await RunCli(b => b, h => RunProbe(h, args[1])); return; }
 if (args.Length == 2 && args[0] == "--probe-devstatus")
     { await RunCli(b => b, h => RunDevStatusProbe(h, args[1])); return; }
+// The overdue warning cannot fire until the read:dev-info:jira scope is granted, so this is the
+// only way to see a real toast come out of the published exe.
+if (args.Length == 1 && args[0] == "--test-toast")
+{
+    // Deliberately NOT going through WindowsToastNotifier: its balloon fallback swallows the
+    // failure, which is right in production and useless for verifying that toasts work at all.
+    try
+    {
+        var xml = new Windows.Data.Xml.Dom.XmlDocument();
+        xml.LoadXml(WindowsToastNotifier.BuildXml(
+            "TmTimeTracker", "Test notification - this one is marked urgent.", urgent: true));
+        Microsoft.Toolkit.Uwp.Notifications.ToastNotificationManagerCompat
+            .CreateToastNotifier()
+            .Show(new Windows.UI.Notifications.ToastNotification(xml));
+        Console.WriteLine("Toast handed to Windows without error.");
+        // Windows delivers it asynchronously; exiting immediately can cut it off.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        return;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Toast failed: {ex}");
+        Environment.ExitCode = 1;
+        return;
+    }
+}
 if (args.Length == 1 && args[0] == "--smoke-activity")
     { await RunCli(b => b.AddActivityServices(), RunStreaming); return; }
 if (args.Length == 1 && args[0] == "--smoke-poll")

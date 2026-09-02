@@ -22,8 +22,8 @@ internal enum AnnouncementOutcome
 ///      periodic discovery so a restart or a missed event cannot lose it).
 ///   2. A queued ticket that has not been announced is polled until Jira reports its pull request.
 ///   3. When the pull request appears, the message is posted and the ticket is marked announced.
-///   4. If no pull request appears within 10 minutes of the branch's last commit, a tray
-///      notification asks the user to announce it manually - once, not repeatedly.
+///   4. If no pull request appears within 10 minutes of the branch's last commit, an urgent
+///      Windows notification asks the user to announce it manually - once, not repeatedly.
 ///
 /// State lives in the pr_announcement table rather than in memory, because Jira can take longer to
 /// surface a pull request than the app is guaranteed to stay running.
@@ -42,7 +42,7 @@ public sealed class PrAnnouncementWorker : BackgroundService
     private readonly IPullRequestSource _pullRequests;
     private readonly IJiraSiteResolver _site;
     private readonly ISlackPoster _slack;
-    private readonly IBalloonNotifier _balloon;
+    private readonly IUserNotifier _notifier;
     private readonly IClock _clock;
     private readonly ILogger<PrAnnouncementWorker> _log;
 
@@ -56,13 +56,13 @@ public sealed class PrAnnouncementWorker : BackgroundService
         IPullRequestSource pullRequests,
         IJiraSiteResolver site,
         ISlackPoster slack,
-        IBalloonNotifier balloon,
+        IUserNotifier notifier,
         IClock clock,
         ILogger<PrAnnouncementWorker> log)
     {
         _bus = bus; _announcements = announcements; _channels = channels; _tickets = tickets;
         _config = config; _issues = issues; _pullRequests = pullRequests; _site = site;
-        _slack = slack; _balloon = balloon; _clock = clock; _log = log;
+        _slack = slack; _notifier = notifier; _clock = clock; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -245,11 +245,13 @@ public sealed class PrAnnouncementWorker : BackgroundService
         if (row.HasWarned || snapshot.LastCommitUtc is null) return;
         if (_clock.UtcNow - snapshot.LastCommitUtc.Value.UtcDateTime < WarnAfterLastCommit) return;
 
-        _balloon.Show(
+        // Urgent, so it still reaches the user under Do Not Disturb: the whole point of this
+        // notification is that the announcement is not going to happen without them.
+        _notifier.Show(
             $"{ticketKey}: no pull request found",
             $"It has been over {WarnAfterLastCommit.TotalMinutes:0} minutes since the last commit and "
             + "Jira still reports no pull request. You may need to announce it yourself.",
-            ToolTipIcon.Warning);
+            urgent: true);
 
         _announcements.MarkWarned(ticketKey, _clock.UtcNow);
         _log.LogWarning("No pull request for {Ticket} {Minutes} minutes after its last commit",

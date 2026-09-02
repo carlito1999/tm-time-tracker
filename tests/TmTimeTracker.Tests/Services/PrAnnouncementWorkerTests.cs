@@ -27,7 +27,7 @@ public class PrAnnouncementWorkerTests
         public required PrAnnouncementRepository Announcements { get; init; }
         public required TicketTimeRepository Tickets { get; init; }
         public required Mock<ISlackPoster> Slack { get; init; }
-        public required Mock<IBalloonNotifier> Balloon { get; init; }
+        public required Mock<IUserNotifier> Notifier { get; init; }
         public required Mock<IPullRequestSource> PullRequests { get; init; }
         public required MutableClock Clock { get; init; }
     }
@@ -62,20 +62,20 @@ public class PrAnnouncementWorkerTests
                       "257 Less important but convenient"), "28848"));
 
         var slack = new Mock<ISlackPoster>();
-        var balloon = new Mock<IBalloonNotifier>();
+        var notifier = new Mock<IUserNotifier>();
         var clock = new MutableClock();
         var announcements = new PrAnnouncementRepository(factory);
         var tickets = new TicketTimeRepository(factory);
 
         var worker = new PrAnnouncementWorker(
             new Mock<IEventBus>().Object, announcements, channels, tickets, config,
-            issues.Object, pullRequests.Object, site.Object, slack.Object, balloon.Object,
+            issues.Object, pullRequests.Object, site.Object, slack.Object, notifier.Object,
             clock, NullLogger<PrAnnouncementWorker>.Instance);
 
         return new Harness
         {
             Worker = worker, Announcements = announcements, Tickets = tickets,
-            Slack = slack, Balloon = balloon, PullRequests = pullRequests, Clock = clock
+            Slack = slack, Notifier = notifier, PullRequests = pullRequests, Clock = clock
         };
     }
 
@@ -159,8 +159,8 @@ public class PrAnnouncementWorkerTests
 
         await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
 
-        h.Balloon.Verify(b => b.Show(
-            It.Is<string>(t => t.Contains("SN-298")), It.IsAny<string>(), ToolTipIcon.Warning),
+        h.Notifier.Verify(b => b.Show(
+            It.Is<string>(t => t.Contains("SN-298")), It.IsAny<string>(), true),
             Times.Once);
         h.Announcements.Find("SN-298")!.HasWarned.Should().BeTrue();
     }
@@ -175,7 +175,7 @@ public class PrAnnouncementWorkerTests
 
         await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
 
-        h.Balloon.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<ToolTipIcon>()),
+        h.Notifier.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
             Times.Never);
     }
 
@@ -192,7 +192,7 @@ public class PrAnnouncementWorkerTests
         h.Clock.UtcNow = h.Clock.UtcNow.AddMinutes(5);
         await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
 
-        h.Balloon.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<ToolTipIcon>()),
+        h.Notifier.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
             Times.Once);
     }
 
@@ -206,7 +206,7 @@ public class PrAnnouncementWorkerTests
         var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
 
         outcome.Should().Be(AnnouncementOutcome.Waiting);
-        h.Balloon.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<ToolTipIcon>()),
+        h.Notifier.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
             Times.Never);
     }
 

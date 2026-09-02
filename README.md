@@ -273,8 +273,20 @@ to a restart:
 3. When the pull request appears, the message is posted and the ticket is marked
    announced — it can never be announced twice.
 4. If **10 minutes pass since the branch's last commit** and Jira still reports no
-   pull request, a tray notification tells you to announce it yourself. Once per
-   ticket, not every poll. Polling continues in case it turns up later.
+   pull request, an **urgent Windows notification** tells you to announce it
+   yourself. Once per ticket, not every poll. Polling continues in case it turns
+   up later.
+
+   Urgent means the toast is allowed to break through Do Not Disturb. Windows asks
+   you to permit that the first time one arrives; until you do, it behaves like an
+   ordinary notification. Nothing else needs installing — the app registers its own
+   notification identity on first use. If toasts are unavailable (disabled by
+   policy, for instance) it falls back to a tray balloon.
+
+   The app does **not** know whether you already announced a ticket by hand: this
+   notification is deliberately not de-duplicated against manual Slack posts.
+
+   Run `TmTimeTracker.exe --test-toast` to fire one on demand.
 
 State lives in the `pr_announcement` table. When a ticket leaves review its row is
 forgotten, so returning to review announces again.
