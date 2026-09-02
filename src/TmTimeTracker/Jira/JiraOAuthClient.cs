@@ -26,7 +26,11 @@ public sealed class JiraOAuthClient
         var qs = new StringBuilder()
             .Append("audience=api.atlassian.com")
             .Append("&client_id=").Append(Uri.EscapeDataString(c.ClientId))
-            .Append("&scope=").Append(Uri.EscapeDataString("read:jira-work write:jira-work offline_access"))
+            // read:dev-info:jira is granular and covers /rest/dev-status/ (linked branches, commits
+            // and pull requests). Without it that endpoint answers 401 "scope does not match" even
+            // though read:jira-work is granted, because it is not part of the classic work scope.
+            .Append("&scope=").Append(Uri.EscapeDataString(
+                "read:jira-work write:jira-work read:dev-info:jira offline_access"))
             .Append("&redirect_uri=").Append(Uri.EscapeDataString(c.RedirectUri))
             .Append("&state=").Append(Uri.EscapeDataString(state))
             .Append("&response_type=code&prompt=consent");

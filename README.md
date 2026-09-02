@@ -241,11 +241,32 @@ Done ✅ {TICKET} — {SUMMARY}
 | `{PR_TITLE}` | Pull request title | `SN-296-372: enhance Tolgee caching` |
 | `{PR_STATUS}` | Pull request state | `OPEN` |
 
-The three `PR_*` variables need **Bitbucket connected to Jira** (Jira → Settings
-→ Apps → Bitbucket). That is a product-to-product link, not a credential this app
-holds — the pull request is read with the Jira token you already authorised, and
-no Bitbucket login is stored anywhere. Until it is connected, or on a ticket with
-no pull request, those placeholders render literally and the message still sends.
+The three `PR_*` variables need two things, neither of which is a new credential:
+
+1. **Bitbucket connected to Jira** (Jira → Settings → Apps → Bitbucket). A
+   product-to-product link — no Bitbucket login is stored by this app.
+2. **The `read:dev-info:jira` scope** on your OAuth app. Add it at
+   <https://developer.atlassian.com/console/myapps/> → your app → Permissions →
+   Jira API → Configure → add `read:dev-info:jira`, then reconnect from
+   **Settings → Connection**. Without it the development endpoint answers
+   `401 "scope does not match"`, because `read:jira-work` does not cover it.
+
+Check it end to end with:
+
+```powershell
+dotnet run --project src\TmTimeTracker -- --probe-devstatus <numeric issue id>
+```
+
+A `200` means pull-request data is reachable; `401 "scope does not match"` means
+the scope is missing or the app has not been reauthorised since it was added.
+
+**Messages that ask for a pull request wait for one.** If a template contains any
+`{PR_*}` placeholder and Jira does not know about a pull request yet, the
+notification is held and retried every 30s for up to 10 minutes rather than
+posted with a literal `{PR_URL}` in it — Jira ingests a pull request moments
+after it is opened, so a promptly-dragged ticket would otherwise always lose that
+race. After 10 minutes the notification is dropped and a warning is logged.
+Templates with no `{PR_*}` placeholder send immediately as before.
 
 When a ticket has several pull requests, an `OPEN` one always wins over a merged
 or declined one, and the most recently updated wins within that group — so a

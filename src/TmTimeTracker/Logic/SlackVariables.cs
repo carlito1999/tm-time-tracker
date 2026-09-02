@@ -65,6 +65,17 @@ public static class SlackVariables
         return vars;
     }
 
+    private static readonly System.Text.RegularExpressions.Regex PullRequestPlaceholder =
+        new(@"\{PR_[A-Z_]+\}", System.Text.RegularExpressions.RegexOptions.Compiled
+                             | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Whether a template asks for pull-request data. Used to decide if a notification should wait
+    /// for the pull request to appear rather than send with a literal {PR_URL} in it.
+    /// </summary>
+    public static bool TemplateReferencesPullRequest(string? template) =>
+        !string.IsNullOrEmpty(template) && PullRequestPlaceholder.IsMatch(template);
+
     /// <summary>Sample values, used for the Settings live preview and the test message.</summary>
     public static IReadOnlyDictionary<string, string> Sample() =>
         Catalog.ToDictionary(c => c.Name, c => c.Sample, StringComparer.Ordinal);

@@ -15,6 +15,8 @@ AppPaths.EnsureExists();
 
 if (args.Length >= 1 && args[0] == "--login")     { await RunCli(b => b, RunLogin); return; }
 if (args.Length == 2 && args[0] == "--probe-jira"){ await RunCli(b => b, h => RunProbe(h, args[1])); return; }
+if (args.Length == 2 && args[0] == "--probe-devstatus")
+    { await RunCli(b => b, h => RunDevStatusProbe(h, args[1])); return; }
 if (args.Length == 1 && args[0] == "--smoke-activity")
     { await RunCli(b => b.AddActivityServices(), RunStreaming); return; }
 if (args.Length == 1 && args[0] == "--smoke-poll")
@@ -166,6 +168,47 @@ static void TryMigrateSecretsJson(IServiceProvider sp)
         try { File.Move(path, "secrets.json.migrated", overwrite: true); } catch { /* best-effort */ }
     }
     catch { /* migration is best-effort; ignore */ }
+}
+
+// Diagnostic: the development-information endpoint is undocumented, so this reports what the
+// app's OAuth token can actually reach - the api.atlassian.com gateway, the site host, or neither.
+static async Task RunDevStatusProbe(IHost host, string issueId)
+{
+    var coordinator = host.Services.GetRequiredService<OAuthCoordinator>();
+    var (token, cloudId) = await coordinator.GetAccessTokenAsync(CancellationToken.None);
+    var sites = await coordinator.ListAccessibleAsync(CancellationToken.None);
+    var siteUrl = sites.FirstOrDefault(s => s.Id == cloudId)?.Url;
+
+    var query = $"/rest/dev-status/1.0/issue/detail?issueId={issueId}" +
+                "&applicationType=bitbucket&dataType=pullrequest";
+
+    var targets = new List<(string Label, string Url)>
+    {
+        ("gateway  (api.atlassian.com)", $"https://api.atlassian.com/ex/jira/{cloudId}{query}")
+    };
+    if (!string.IsNullOrWhiteSpace(siteUrl))
+        targets.Add(("site host " + siteUrl, $"{siteUrl.TrimEnd('/')}{query}"));
+
+    using var http = new HttpClient();
+    foreach (var (label, url) in targets)
+    {
+        try
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            var response = await http.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"{label} -> {(int)response.StatusCode} {response.StatusCode}");
+            Console.WriteLine("    " + body[..Math.Min(400, body.Length)].ReplaceLineEndings(" "));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"{label} -> {ex.GetType().Name}: {ex.Message}");
+        }
+        Console.WriteLine();
+    }
 }
 
 static void SeedConfigIfMissing(IHost host)
