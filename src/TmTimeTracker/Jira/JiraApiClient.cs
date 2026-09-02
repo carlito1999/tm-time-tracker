@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace TmTimeTracker.Jira;
 
-public sealed class JiraApiClient
+public sealed class JiraApiClient : IJiraIssueSource
 {
     private const string DefaultApiBase = "https://api.atlassian.com/ex/jira";
     private readonly HttpClient _http;
@@ -23,10 +23,21 @@ public sealed class JiraApiClient
     public async Task<Issue> GetIssueAsync(string key, CancellationToken ct)
     {
         var (resp, _) = await SendAsync(HttpMethod.Get,
-            cloudId => $"{_apiBase}/{cloudId}/rest/api/3/issue/{key}?fields=status",
+            cloudId => $"{_apiBase}/{cloudId}/rest/api/3/issue/{key}?fields=status,summary",
             content: null, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<Issue>(cancellationToken: ct).ConfigureAwait(false))!;
+    }
+
+    public async Task<IReadOnlyList<JiraProject>> ListProjectsAsync(CancellationToken ct)
+    {
+        var (resp, _) = await SendAsync(HttpMethod.Get,
+            cloudId => $"{_apiBase}/{cloudId}/rest/api/3/project/search?maxResults=50",
+            content: null, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        var page = await resp.Content.ReadFromJsonAsync<JiraProjectPage>(cancellationToken: ct)
+                                     .ConfigureAwait(false);
+        return page?.Values ?? Array.Empty<JiraProject>();
     }
 
     public async Task<WorklogResponse> PostWorklogAsync(string key, WorklogRequest body, CancellationToken ct)

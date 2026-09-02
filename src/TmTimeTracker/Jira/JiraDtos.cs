@@ -22,8 +22,17 @@ public sealed record StatusCategory(
     [property: JsonPropertyName("key")] string Key,
     [property: JsonPropertyName("name")] string Name);
 
+// Summary is optional with a default so existing construction sites keep compiling.
 public sealed record IssueFields(
-    [property: JsonPropertyName("status")] IssueStatus Status);
+    [property: JsonPropertyName("status")] IssueStatus Status,
+    [property: JsonPropertyName("summary")] string? Summary = null);
+
+public sealed record JiraProject(
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("name")] string Name);
+
+public sealed record JiraProjectPage(
+    [property: JsonPropertyName("values")] JiraProject[] Values);
 
 public sealed record Issue(
     [property: JsonPropertyName("key")] string Key,

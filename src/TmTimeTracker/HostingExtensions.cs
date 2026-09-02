@@ -93,6 +93,8 @@ public static class HostingExtensions
                 var log = sp.GetRequiredService<ILogger<JiraApiClient>>();
                 return new JiraApiClient(http, tokens, log);
             });
+            services.AddSingleton<IJiraIssueSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
             services.AddSingleton<LocalCallbackListener>();
         });
         return builder;

@@ -7,7 +7,7 @@ using TmTimeTracker.Platform;
 
 namespace TmTimeTracker.Services;
 
-public sealed class OAuthCoordinator : IAccessTokenSource
+public sealed class OAuthCoordinator : IAccessTokenSource, IAccessibleSiteSource
 {
     private readonly OAuthStateRepository _state;
     private readonly ITokenProtector _protector;

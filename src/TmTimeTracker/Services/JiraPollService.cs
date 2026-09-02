@@ -8,14 +8,14 @@ namespace TmTimeTracker.Services;
 public sealed class JiraPollService : BackgroundService
 {
     private readonly TicketTimeRepository _tickets;
-    private readonly JiraApiClient _api;
+    private readonly IJiraIssueSource _api;
     private readonly ConfigRepository _config;
     private readonly IEventBus _bus;
     private readonly IClock _clock;
     private readonly ILogger<JiraPollService> _log;
     private readonly PollServiceGate _gate;
 
-    public JiraPollService(TicketTimeRepository tickets, JiraApiClient api,
+    public JiraPollService(TicketTimeRepository tickets, IJiraIssueSource api,
         ConfigRepository config, IEventBus bus, IClock clock, ILogger<JiraPollService> log,
         PollServiceGate gate)
     {
