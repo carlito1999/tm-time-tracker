@@ -11,6 +11,10 @@ namespace TmTimeTracker.UI;
 
 public sealed class DashboardWindow : Form
 {
+    // Date plus minutes: enough to tell yesterday's clock from today's, without the seconds that
+    // change every poll and make the column twitch.
+    private const string RowTimeFormat = "dd MMM HH:mm";
+
     private readonly IEventBus _bus;
     private readonly TicketTimeRepository _tickets;
     private readonly OAuthStateRepository _oauthState;
@@ -125,10 +129,15 @@ public sealed class DashboardWindow : Form
         _pending.Columns.Add("first_seen",  "Started");
         _pending.Columns.Add("last_polled", "Last poll");
         _pending.Columns["ticket"].DefaultCellStyle.Font = Theme.Mono;
-        _pending.Columns["minutes"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
-        _pending.Columns["minutes"].FillWeight = 50;
+        _pending.Columns["minutes"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        _pending.Columns["minutes"].HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
         _pending.Columns["first_seen"].DefaultCellStyle.Font = Theme.Mono;
         _pending.Columns["last_polled"].DefaultCellStyle.Font = Theme.Mono;
+        // Both time columns now carry a date, so they need the width the minutes column can spare.
+        _pending.Columns["ticket"].FillWeight = 85;
+        _pending.Columns["minutes"].FillWeight = 45;
+        _pending.Columns["first_seen"].FillWeight = 115;
+        _pending.Columns["last_polled"].FillWeight = 115;
 
         _emptyPending = new Label
         {
@@ -383,8 +392,10 @@ public sealed class DashboardWindow : Form
             _pending.Rows.Add(
                 t.TicketKey,
                 t.MinutesActive,
-                t.CycleStarted.ToLocalTime().ToString("HH:mm"),
-                t.LastPolled?.ToLocalTime().ToString("HH:mm:ss") ?? "—");
+                t.CycleStarted.ToLocalTime().ToString(RowTimeFormat),
+                // Seconds are still stored and still drive the staleness check below; they are
+                // just noise in a column you read at a glance.
+                t.LastPolled?.ToLocalTime().ToString(RowTimeFormat) ?? "—");
         }
         bool hasRows = _pending.Rows.Count > 0;
         _pending.Visible = hasRows;
