@@ -1,6 +1,3 @@
-using System.Globalization;
-using System.Text.RegularExpressions;
-
 namespace TmTimeTracker.Logic;
 
 /// <param name="Name">Short remote ref, e.g. "origin/dev-01-09-2026".</param>
@@ -10,68 +7,50 @@ public sealed record BranchCandidate(string Name, DateTime CommittedAt);
 /// <summary>
 /// Chooses which trunk branch a repo's estimates should run against.
 ///
-/// The tracked repos cut trunk snapshots stamped with a European date - main-03-09-2026,
-/// dev-01-09-2026, dev-27-08-2026. That date is the team's own ordering, and it is what to sort
-/// on rather than the commit date. The two genuinely disagree: dev-31-08-2026 was last committed
-/// on the 30th and dev-07-07-2026 back in June. Worse, a hotfix pushed to an old snapshot gives
-/// it the newest commit date, which would make commit-date ordering select a stale branch.
+/// Two steps, because a repo's trunk is a convention rather than a fixed name.
 ///
-/// A dated snapshot also beats an undated branch outright, because an undated long-lived branch
-/// is usually a stub - the "mainTraining" branch that motivated all this holds one .gitignore
-/// and would otherwise win on recency.
+/// First identify the family the repo actually uses. Branch names are grouped by their leading
+/// word - main, master, dev - and the family with the most branches wins, because a repo that
+/// cuts dated snapshots repeats its prefix many times over. This is what rules out a one-off
+/// stub: "mainTraining" is its own family of one and loses to a "dev" family holding a dozen
+/// snapshots, even though the stub is the branch origin/HEAD points at.
 ///
-/// Repos with no dated snapshots (a plain master or main) fall back to commit date, which is the
-/// right answer when there is only one trunk.
+/// Then pick the newest branch inside that family by commit date, so a rolling convention keeps
+/// working when the next snapshot is cut, with no configuration to update.
+///
+/// Grouping on the leading word is what keeps "main" and "mainTraining" apart: the split is at
+/// the first non-letter, so "main-03-09-2026-updated" is family "main" while "mainTraining" is
+/// its own.
 /// </summary>
 public static class TrunkBranchSelector
 {
-    // Four-digit year first: "01-09-2026" would otherwise match the two-digit form as "01-09-20".
-    private static readonly Regex FourDigitYear =
-        new(@"(?<!\d)(\d{2})-(\d{2})-(\d{4})(?!\d)", RegexOptions.Compiled);
-
-    private static readonly Regex TwoDigitYear =
-        new(@"(?<!\d)(\d{2})-(\d{2})-(\d{2})(?!\d)", RegexOptions.Compiled);
-
     public static string? Select(IReadOnlyList<BranchCandidate> candidates)
     {
         if (candidates.Count == 0) return null;
 
-        var dated = candidates
-            .Select(c => (Candidate: c, Stamp: DateInName(c.Name)))
-            .Where(x => x.Stamp is not null)
-            .ToList();
+        var family = candidates
+            .GroupBy(c => Family(c.Name), StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Count())
+            // A tie between two equally sized families goes to the one worked on most recently.
+            .ThenByDescending(g => g.Max(c => c.CommittedAt))
+            .First();
 
-        if (dated.Count > 0)
-            return dated
-                .OrderByDescending(x => x.Stamp!.Value)
-                .ThenByDescending(x => x.Candidate.CommittedAt)
-                .First().Candidate.Name;
-
-        return candidates.OrderByDescending(c => c.CommittedAt).First().Name;
+        return family.OrderByDescending(c => c.CommittedAt).First().Name;
     }
 
     /// <summary>
-    /// The DD-MM-YYYY stamp inside a branch name, or null when there isn't a valid one. The date
-    /// need not end the name: "main-03-09-2026-updated" is a real branch.
+    /// The leading word of a branch name, after any remote prefix: "origin/dev-01-09-2026" gives
+    /// "dev" and "origin/main-03-09-2026-updated" gives "main". A name that is all letters is its
+    /// own family, which is how a stub like "mainTraining" stays separate from "main".
     /// </summary>
-    public static DateTime? DateInName(string name)
+    public static string Family(string name)
     {
-        return Parse(FourDigitYear.Match(name), century: 0)
-            ?? Parse(TwoDigitYear.Match(name), century: 2000);
-    }
+        var slash = name.LastIndexOf('/');
+        var branch = slash >= 0 ? name[(slash + 1)..] : name;
 
-    private static DateTime? Parse(Match match, int century)
-    {
-        if (!match.Success) return null;
+        var end = 0;
+        while (end < branch.Length && char.IsLetter(branch[end])) end++;
 
-        var day = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
-        var month = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
-        var year = int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture) + century;
-
-        // Rejects the likes of dev-45-99-2026 rather than letting a nonsense name win.
-        if (month is < 1 or > 12 || day < 1 || day > DateTime.DaysInMonth(year, month))
-            return null;
-
-        return new DateTime(year, month, day);
+        return end == 0 ? branch : branch[..end];
     }
 }
