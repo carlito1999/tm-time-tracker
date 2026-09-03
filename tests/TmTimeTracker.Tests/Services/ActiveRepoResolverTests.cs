@@ -34,13 +34,6 @@ public class ActiveRepoResolverTests : IDisposable
             ByPath.TryGetValue(repoPath, out var b) ? b : null;
     }
 
-    private sealed class FakeClaude : IClaudeCodeActivityProbe
-    {
-        public Dictionary<string, DateTime> Snapshot { get; } =
-            new(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyDictionary<string, DateTime> IClaudeCodeActivityProbe.Snapshot() => Snapshot;
-    }
-
     private sealed class FakeClock : IClock
     {
         public DateTime UtcNow { get; set; } = new(2026, 5, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -58,7 +51,7 @@ public class ActiveRepoResolverTests : IDisposable
     }
 
     private (ActiveRepoResolver r, TrackedRepoRepository repos, FakeForeground fg,
-             FakeBranchProbe git, FakeClock clk, FakeClaude claude)
+             FakeBranchProbe git, FakeClock clk)
         Build(IEnumerable<string> repoPaths)
     {
         var ds = SharedSqlite.NewInMemory();
@@ -69,10 +62,9 @@ public class ActiveRepoResolverTests : IDisposable
         var fg = new FakeForeground();
         var git = new FakeBranchProbe();
         var clk = new FakeClock();
-        var claude = new FakeClaude();
-        var r = new ActiveRepoResolver(repos, fg, claude, git, clk,
+        var r = new ActiveRepoResolver(repos, fg, git, clk,
             NullLogger<ActiveRepoResolver>.Instance);
-        return (r, repos, fg, git, clk, claude);
+        return (r, repos, fg, git, clk);
     }
 
     [Fact]
@@ -81,7 +73,7 @@ public class ActiveRepoResolverTests : IDisposable
         var ds = SharedSqlite.NewInMemory();
         new DatabaseInitializer(ds).EnsureCreated();
         var r = new ActiveRepoResolver(new TrackedRepoRepository(ds),
-            new FakeForeground(), new FakeClaude(), new FakeBranchProbe(),
+            new FakeForeground(), new FakeBranchProbe(),
             new FakeClock(), NullLogger<ActiveRepoResolver>.Instance);
         r.Resolve().Should().BeNull();
     }
@@ -96,7 +88,7 @@ public class ActiveRepoResolverTests : IDisposable
         var a = MakeRepo("project-a", fresh);
         var b = MakeRepo("project-b", stale);
 
-        var (r, _, fg, git, _, _) = Build(new[] { a, b });
+        var (r, _, fg, git, _) = Build(new[] { a, b });
         fg.Value = new ForegroundWindow("Code", "Program.cs - project-b - Visual Studio Code");
         git.ByPath[b] = "TM-29-foo";
 
@@ -113,7 +105,7 @@ public class ActiveRepoResolverTests : IDisposable
         var a = MakeRepo("a", clock.UtcNow.AddMinutes(-2));
         var b = MakeRepo("b", clock.UtcNow.AddMinutes(-1));
 
-        var (r, _, fg, git, _, _) = Build(new[] { a, b });
+        var (r, _, fg, git, _) = Build(new[] { a, b });
         fg.Value = new ForegroundWindow("chrome", "Some browser tab - Google Chrome");
         git.ByPath[b] = "feature/TM-30";
 
@@ -127,7 +119,7 @@ public class ActiveRepoResolverTests : IDisposable
     {
         var clock = new FakeClock();
         var a = MakeRepo("a", clock.UtcNow.AddHours(-1));
-        var (r, _, fg, git, _, _) = Build(new[] { a });
+        var (r, _, fg, git, _) = Build(new[] { a });
         fg.Value = new ForegroundWindow("Code", "Program.cs - a - Visual Studio Code");
         git.ByPath[a] = "TM-29";
         var first = r.Resolve();
@@ -143,7 +135,7 @@ public class ActiveRepoResolverTests : IDisposable
     {
         var clock = new FakeClock();
         var repo = MakeRepo("Project-X", clock.UtcNow);
-        var (r, _, fg, git, _, _) = Build(new[] { repo });
+        var (r, _, fg, git, _) = Build(new[] { repo });
         fg.Value = new ForegroundWindow("Code", "foo.cs - project-x - Visual Studio Code");
         git.ByPath[repo] = "main";
 
@@ -158,70 +150,33 @@ public class ActiveRepoResolverTests : IDisposable
         var repos = new TrackedRepoRepository(ds);
         repos.Add(@"c:\nonexistent\ghost");
 
-        var r = new ActiveRepoResolver(repos, new FakeForeground(), new FakeClaude(),
+        var r = new ActiveRepoResolver(repos, new FakeForeground(),
             new FakeBranchProbe(), new FakeClock(),
             NullLogger<ActiveRepoResolver>.Instance);
 
         r.Resolve().Should().BeNull();
     }
 
+    // The resolver used to rank Claude Code activity above window focus, which meant an agent
+    // running in one repo took the minutes you were typing into another. Claude-driven repos are
+    // credited by their own stream now (see RepoActivityMonitor), so focus wins here.
     [Fact]
-    public void Claude_active_beats_VS_Code_window_for_different_repo()
+    public void VS_Code_window_wins_even_when_another_repo_has_a_live_Claude_session()
     {
         var clock = new FakeClock();
         var a = MakeRepo("project-a", clock.UtcNow.AddHours(-1));
         var b = MakeRepo("project-b", clock.UtcNow.AddHours(-1));
 
-        var (r, _, fg, git, _, claude) = Build(new[] { a, b });
+        var (r, _, fg, git, _) = Build(new[] { a, b });
 
-        // VS Code focused on project-b
+        // VS Code focused on project-b, while a Claude session hammers project-a.
         fg.Value = new ForegroundWindow("Code", "Program.cs - project-b - Visual Studio Code");
         git.ByPath[a] = "feature/TM-29";
-        git.ByPath[b] = "main";
-
-        // But Claude is actively working on project-a
-        claude.Snapshot[ClaudeProjectSlug.FromPath(a)] = clock.UtcNow.AddSeconds(-15);
+        git.ByPath[b] = "TM-30-x";
 
         var res = r.Resolve();
-        res!.RepoPath.Should().Be(a);
-        res.TicketKey.Should().Be("TM-29");
-    }
-
-    [Fact]
-    public void Claude_stale_beyond_60s_does_not_win()
-    {
-        var clock = new FakeClock();
-        var a = MakeRepo("project-a", clock.UtcNow.AddHours(-1));
-        var b = MakeRepo("project-b", clock.UtcNow.AddMinutes(-1));
-
-        var (r, _, fg, git, _, claude) = Build(new[] { a, b });
-        fg.Value = null;
-        git.ByPath[b] = "TM-30";
-
-        // Claude wrote to a 90s ago — outside window
-        claude.Snapshot[ClaudeProjectSlug.FromPath(a)] = clock.UtcNow.AddSeconds(-90);
-
-        var res = r.Resolve();
-        // Should fall through to polling tier → b
         res!.RepoPath.Should().Be(b);
-    }
-
-    [Fact]
-    public void Claude_active_for_untracked_repo_is_ignored()
-    {
-        var clock = new FakeClock();
-        var a = MakeRepo("project-a", clock.UtcNow.AddMinutes(-1));
-
-        var (r, _, fg, git, _, claude) = Build(new[] { a });
-        fg.Value = null;
-        git.ByPath[a] = "main";
-
-        // Claude active for an untracked project
-        claude.Snapshot["c--projects-untracked-side-project"] = clock.UtcNow.AddSeconds(-5);
-
-        var res = r.Resolve();
-        // Falls through to polling, finds a
-        res!.RepoPath.Should().Be(a);
+        res.TicketKey.Should().Be("TM-30");
     }
 
     [Fact]
@@ -229,7 +184,7 @@ public class ActiveRepoResolverTests : IDisposable
     {
         var clock = new FakeClock();
         var a = MakeRepo("a", clock.UtcNow);
-        var (r, _, fg, git, _, _) = Build(new[] { a });
+        var (r, _, fg, git, _) = Build(new[] { a });
         fg.Value = new ForegroundWindow("Code", "foo.cs - a - Visual Studio Code");
         git.ByPath[a] = "TM-99";
         r.LastResolution.Should().BeNull();
@@ -242,7 +197,7 @@ public class ActiveRepoResolverTests : IDisposable
     {
         var clock = new FakeClock();
         var a = MakeRepo("a", clock.UtcNow);
-        var (r, _, fg, git, _, _) = Build(new[] { a });
+        var (r, _, fg, git, _) = Build(new[] { a });
         fg.Value = new ForegroundWindow("Code", "foo.cs - a - Visual Studio Code");
         git.ByPath[a] = "main";
 
