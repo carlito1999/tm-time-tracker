@@ -17,7 +17,7 @@ public sealed class WindowsHost
     private readonly ConfigRepository _config;
     private readonly IClock _clock;
     private readonly IClaudeCodeActivityProbe _claudeProbe;
-    private readonly ActiveRepoResolver _resolver;
+    private readonly TrackedRepoRepository _repos;
     private readonly JiraApiClient _api;
 
     private SetupWindow? _setup;
@@ -35,7 +35,7 @@ public sealed class WindowsHost
         ConfigRepository config,
         IClock clock,
         IClaudeCodeActivityProbe claudeProbe,
-        ActiveRepoResolver resolver,
+        TrackedRepoRepository repos,
         JiraApiClient api)
     {
         _sp = sp;
@@ -47,7 +47,7 @@ public sealed class WindowsHost
         _config = config;
         _clock = clock;
         _claudeProbe = claudeProbe;
-        _resolver = resolver;
+        _repos = repos;
         _api = api;
     }
 
@@ -112,7 +112,7 @@ public sealed class WindowsHost
             {
                 _dashboard = new DashboardWindow(
                     _bus, _tickets, _oauthState, _entries, _config,
-                    _clock, _claudeProbe, _resolver, _api,
+                    _clock, _claudeProbe, _repos, _api,
                     _logFactory.CreateLogger<DashboardWindow>());
                 // Subscribed once at construction, not per Show, or the handler would stack up.
                 _dashboard.SettingsRequested += ShowSettings;

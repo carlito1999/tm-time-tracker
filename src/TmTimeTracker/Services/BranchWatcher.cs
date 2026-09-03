@@ -38,7 +38,7 @@ public sealed class BranchWatcher : BackgroundService
                     _lastRepoPath = repoPath;
                     _lastBranch = branch;
                     _lastTicket = ticket;
-                    await _bus.PublishAsync(new BranchChanged(branch, ticket, _clock.UtcNow), stoppingToken)
+                    await _bus.PublishAsync(new BranchChanged(repoPath, branch, ticket, _clock.UtcNow), stoppingToken)
                               .ConfigureAwait(false);
                     _log.LogInformation("Active repo -> {Repo} branch={Branch} ticket={Ticket}",
                         repoPath, branch, ticket);
