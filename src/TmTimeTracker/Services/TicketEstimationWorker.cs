@@ -304,10 +304,14 @@ public sealed class TicketEstimationWorker : BackgroundService
         var matched = RepoProjectMatcher.Match(repoPath, projects);
         if (matched is null)
         {
+            // Names the repo folder and the thing that was searched. The old wording -
+            // "No Jira project matches dynatag ... skipped for this repo" - read as though a
+            // local repo had gone missing rather than a Jira project not being found.
             WarnRepoOnce(repoPath, "unmapped",
-                $"No Jira project matches {Name(repoPath)}",
-                "Estimation is skipped for this repo. The folder name has to match a Jira board "
-                + "name for it to be found automatically.",
+                $"{Name(repoPath)}: no matching Jira project",
+                $"The repo folder \"{Name(repoPath)}\" does not match any of your "
+                + $"{projects.Count} Jira projects by name, so its tickets are not being "
+                + "estimated. Pick its project on the Repositories tab in Settings.",
                 urgent: false);
             return null;
         }

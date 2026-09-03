@@ -24,15 +24,41 @@ public static class RepoProjectMatcher
         var folder = FolderName(repoPath);
         if (folder.Length == 0 || projects.Count == 0) return null;
 
-        return Single(projects.Where(p => Normalise(p.Name) == folder))
-            ?? Single(projects.Where(p => Normalise(p.Key) == folder));
+        // Tiers, strongest first. A tier is consulted only when the previous one found nothing,
+        // and a tier that finds several candidates stops the search rather than falling through
+        // to a looser rule - several matches means less certainty, not more.
+        var tiers = new Func<JiraProject, bool>[]
+        {
+            p => Normalise(p.Name) == folder,
+            p => Normalise(p.Key) == folder,
+            p => Extends(Normalise(p.Name), folder)
+        };
+
+        foreach (var tier in tiers)
+        {
+            var keys = projects.Where(tier).Select(p => p.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            if (keys.Count == 1) return keys[0];
+            if (keys.Count > 1) return null;
+        }
+
+        return null;
     }
 
-    private static string? Single(IEnumerable<JiraProject> matches)
-    {
-        var keys = matches.Select(p => p.Key).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        return keys.Count == 1 ? keys[0] : null;
-    }
+    /// <summary>
+    /// One name is the other's beginning: the folder "dynatag" against the project
+    /// "Dynatag-Codes", or a folder "dynatag-codes" against a project "Dynatag".
+    ///
+    /// This tier runs last for a reason. "Sheeponline" and "SheepOnline New" are both real
+    /// projects here, and a repo called "sheeponline-new" extends the first while exactly
+    /// matching the second - resolving exact names first is what stops the older board winning.
+    /// </summary>
+    private static bool Extends(string projectName, string folder) =>
+        projectName.Length > 0 &&
+        (projectName.StartsWith(folder, StringComparison.Ordinal) ||
+         folder.StartsWith(projectName, StringComparison.Ordinal));
+
 
     private static string FolderName(string? repoPath)
     {

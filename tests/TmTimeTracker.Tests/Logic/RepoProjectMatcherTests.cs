@@ -40,6 +40,53 @@ public class RepoProjectMatcherTests
             .Should().Be("SN");
     }
 
+    /// <summary>
+    /// Real pairing: the folder is "dynatag" and the board is "Dynatag-Codes". A repo name that
+    /// is a prefix of exactly one project name is that project.
+    /// </summary>
+    [Fact]
+    public void Matches_a_project_whose_name_extends_the_folder_name()
+    {
+        var dynatag = new JiraProject("DC", "Dynatag-Codes");
+
+        RepoProjectMatcher.Match(@"C:\projects\dynatag", new[] { dynatag, TrainingManager })
+            .Should().Be("DC");
+    }
+
+    [Fact]
+    public void Matches_a_folder_name_that_extends_the_project_name()
+    {
+        var dynatag = new JiraProject("DC", "Dynatag");
+
+        RepoProjectMatcher.Match(@"C:\projects\dynatag-codes", new[] { dynatag })
+            .Should().Be("DC");
+    }
+
+    /// <summary>
+    /// The trap this ordering exists for. "Sheeponline" and "SheepOnline New" are both real
+    /// projects, and the repo "sheeponline-new" is a prefix-match for neither cleanly - it
+    /// exactly matches one of them, and the exact tier settles it before prefixes are consulted.
+    /// </summary>
+    [Fact]
+    public void Prefers_an_exact_name_over_a_prefix_of_another_project()
+    {
+        var older = new JiraProject("SHEEP", "Sheeponline");
+        var current = new JiraProject("SN", "SheepOnline New");
+
+        RepoProjectMatcher.Match(@"C:\projects\sheeponline-new", new[] { older, current })
+            .Should().Be("SN");
+    }
+
+    // Two projects that both extend the folder name give no basis to choose between them.
+    [Fact]
+    public void Returns_null_when_a_prefix_is_ambiguous()
+    {
+        var a = new JiraProject("A1", "Dynatag Codes");
+        var b = new JiraProject("A2", "Dynatag Portal");
+
+        RepoProjectMatcher.Match(@"C:\projects\dynatag", new[] { a, b }).Should().BeNull();
+    }
+
     [Fact]
     public void Returns_null_when_nothing_matches()
     {

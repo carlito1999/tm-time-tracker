@@ -34,6 +34,12 @@ public sealed class RepoProjectRepository
             "SELECT project_key FROM repo_project WHERE repo_path = @p", new { p = repoPath });
     }
 
+    public void Remove(string repoPath)
+    {
+        using var conn = _factory.Open();
+        conn.Execute("DELETE FROM repo_project WHERE repo_path = @p", new { p = repoPath });
+    }
+
     public IReadOnlyList<RepoProjectMapping> GetAll()
     {
         using var conn = _factory.Open();

@@ -1,12 +1,17 @@
 using Microsoft.Extensions.DependencyInjection;
 using TmTimeTracker.Data;
+using TmTimeTracker.Jira;
 
 namespace TmTimeTracker.UI.SetupPages;
 
 public sealed class PathsPage : UserControl
 {
+    private readonly IServiceProvider _sp;
     private readonly TrackedRepoRepository _repos;
+    private readonly RepoProjectRepository _mappings;
     private readonly ListBox _repoList;
+    private readonly ComboBox _projectPicker;
+    private readonly Button _assign;
     private readonly NumericUpDown _idleMin;
     private readonly NumericUpDown _pollSec;
     private readonly TextBox _inProgress;
@@ -15,11 +20,14 @@ public sealed class PathsPage : UserControl
 
     public PathsPage(IServiceProvider sp)
     {
+        _sp = sp;
         _repos = sp.GetRequiredService<TrackedRepoRepository>();
+        _mappings = sp.GetRequiredService<RepoProjectRepository>();
         Dock = DockStyle.Fill;
 
         Controls.Add(new Label { Top = 10, Left = 10, AutoSize = true, Text = "Tracked repos:" });
         _repoList = new ListBox { Top = 30, Left = 10, Width = 470, Height = 110 };
+        _repoList.SelectedIndexChanged += (_, _) => SyncPickerToSelection();
         Controls.Add(_repoList);
 
         var add = new Button { Top = 30, Left = 490, Width = 70, Text = "Add…" };
@@ -30,25 +38,44 @@ public sealed class PathsPage : UserControl
         remove.Click += (_, _) => RemoveSelected();
         Controls.Add(remove);
 
-        Controls.Add(new Label { Top = 155, Left = 10, AutoSize = true, Text = "Idle threshold (minutes):" });
-        _idleMin = new NumericUpDown { Top = 173, Left = 10, Width = 80, Minimum = 1, Maximum = 120, Value = 10 };
+        // Estimation needs to know which Jira board covers each repo. The name match handles
+        // most of them; this is for the ones it cannot resolve, like a "payload-site" folder
+        // whose board is called "New site".
+        Controls.Add(new Label
+        {
+            Top = 145, Left = 10, AutoSize = true, Text = "Jira project for the selected repo:"
+        });
+        _projectPicker = new ComboBox
+        {
+            Top = 163, Left = 10, Width = 260, DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _projectPicker.Items.Add(UnmappedOption);
+        Controls.Add(_projectPicker);
+
+        _assign = new Button { Top = 162, Left = 280, Width = 180, Text = "Assign to selected repo" };
+        _assign.Click += (_, _) => AssignProject();
+        Controls.Add(_assign);
+
+        Controls.Add(new Label { Top = 200, Left = 10, AutoSize = true, Text = "Idle threshold (minutes):" });
+        _idleMin = new NumericUpDown { Top = 218, Left = 10, Width = 80, Minimum = 1, Maximum = 120, Value = 10 };
         Controls.Add(_idleMin);
 
-        Controls.Add(new Label { Top = 155, Left = 200, AutoSize = true, Text = "Jira poll interval (seconds):" });
-        _pollSec = new NumericUpDown { Top = 173, Left = 200, Width = 80, Minimum = 30, Maximum = 600, Value = 90 };
+        Controls.Add(new Label { Top = 200, Left = 200, AutoSize = true, Text = "Jira poll interval (seconds):" });
+        _pollSec = new NumericUpDown { Top = 218, Left = 200, Width = 80, Minimum = 30, Maximum = 600, Value = 90 };
         Controls.Add(_pollSec);
 
-        Controls.Add(new Label { Top = 210, Left = 10, AutoSize = true, Text = "'In Progress' status name:" });
-        _inProgress = new TextBox { Top = 230, Left = 10, Width = 260, Text = "In Progress" };
+        Controls.Add(new Label { Top = 255, Left = 10, AutoSize = true, Text = "'In Progress' status name:" });
+        _inProgress = new TextBox { Top = 275, Left = 10, Width = 260, Text = "In Progress" };
         _inProgress.TextChanged += (_, _) => StateChanged?.Invoke();
         Controls.Add(_inProgress);
 
-        Controls.Add(new Label { Top = 210, Left = 290, AutoSize = true, Text = "Transition target status:" });
-        _transitionTo = new TextBox { Top = 230, Left = 290, Width = 270, Text = "Review" };
+        Controls.Add(new Label { Top = 255, Left = 290, AutoSize = true, Text = "Transition target status:" });
+        _transitionTo = new TextBox { Top = 275, Left = 290, Width = 270, Text = "Review" };
         _transitionTo.TextChanged += (_, _) => StateChanged?.Invoke();
         Controls.Add(_transitionTo);
 
         ReloadList();
+        _ = LoadProjectsAsync();
         var existing = sp.GetRequiredService<ConfigRepository>().TryGet();
         if (existing is not null)
         {
@@ -67,16 +94,108 @@ public sealed class PathsPage : UserControl
     public AppConfig BuildConfig() => new(
         IdleThresholdSeconds: (int)_idleMin.Value * 60,
         JiraPollIntervalSeconds: (int)_pollSec.Value,
-        RepoPath: _repoList.Items.Count > 0 ? (string)_repoList.Items[0]! : "",
+        RepoPath: _repoList.Items.Count > 0 ? ((RepoItem)_repoList.Items[0]!).Path : "",
         RememberPath: "",
         InProgressStatusName: _inProgress.Text.Trim(),
         TransitionToStatusName: _transitionTo.Text.Trim());
 
+    private const string UnmappedOption = "(no Jira project)";
+
+    /// <summary>Carries the path while displaying the mapping, so selection stays path-based.</summary>
+    private sealed record RepoItem(string Path, string? ProjectKey)
+    {
+        public override string ToString() =>
+            ProjectKey is null ? $"{Path}      {UnmappedOption}" : $"{Path}      -> {ProjectKey}";
+    }
+
+    private sealed record ProjectItem(string Key, string Name)
+    {
+        public override string ToString() => $"{Name}  ({Key})";
+    }
+
     private void ReloadList()
     {
+        var selected = (_repoList.SelectedItem as RepoItem)?.Path;
+
         _repoList.Items.Clear();
         foreach (var r in _repos.GetAll())
-            _repoList.Items.Add(r.Path);
+        {
+            var item = new RepoItem(r.Path, _mappings.Find(r.Path));
+            _repoList.Items.Add(item);
+            if (string.Equals(item.Path, selected, StringComparison.OrdinalIgnoreCase))
+                _repoList.SelectedItem = item;
+        }
+    }
+
+    /// <summary>
+    /// Fills the picker from Jira in the background. The page stays usable if this fails - the
+    /// name match covers most repos, and a failure here should not block editing paths.
+    /// </summary>
+    private async Task LoadProjectsAsync()
+    {
+        var source = _sp.GetService<IJiraProjectSource>();
+        if (source is null) return;
+
+        IReadOnlyList<JiraProject> projects;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            projects = await source.ListProjectsAsync(timeout.Token);
+        }
+        catch (Exception)
+        {
+            BeginInvoke(() => _assign.Enabled = false);
+            return;
+        }
+
+        BeginInvoke(() =>
+        {
+            _projectPicker.Items.Clear();
+            _projectPicker.Items.Add(UnmappedOption);
+            foreach (var p in projects.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+                _projectPicker.Items.Add(new ProjectItem(p.Key, p.Name));
+            SyncPickerToSelection();
+        });
+    }
+
+    private void SyncPickerToSelection()
+    {
+        var key = (_repoList.SelectedItem as RepoItem)?.ProjectKey;
+        if (key is null)
+        {
+            _projectPicker.SelectedIndex = _projectPicker.Items.Count > 0 ? 0 : -1;
+            return;
+        }
+
+        for (var i = 0; i < _projectPicker.Items.Count; i++)
+            if (_projectPicker.Items[i] is ProjectItem p &&
+                string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                _projectPicker.SelectedIndex = i;
+                return;
+            }
+    }
+
+    /// <summary>
+    /// A hand-picked mapping is stored with autoMatched false, so the name matcher never
+    /// silently replaces it on a later sweep.
+    /// </summary>
+    private void AssignProject()
+    {
+        if (_repoList.SelectedItem is not RepoItem item)
+        {
+            MessageBox.Show("Select a repo first.", "TmTimeTracker",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_projectPicker.SelectedItem is ProjectItem project)
+            _mappings.Save(item.Path, project.Key, autoMatched: false);
+        else
+            _mappings.Remove(item.Path);
+
+        ReloadList();
+        StateChanged?.Invoke();
     }
 
     private void AddRepo()
@@ -97,8 +216,9 @@ public sealed class PathsPage : UserControl
 
     private void RemoveSelected()
     {
-        if (_repoList.SelectedItem is not string path) return;
-        _repos.Remove(path);
+        if (_repoList.SelectedItem is not RepoItem item) return;
+        _repos.Remove(item.Path);
+        _mappings.Remove(item.Path);
         ReloadList();
         StateChanged?.Invoke();
     }
