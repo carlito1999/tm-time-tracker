@@ -57,27 +57,14 @@ public class IdleStateMachineTests
         sm.Current.Should().Be(UserActivityState.Idle);
     }
 
+    // Claude activity used to force this state machine Active so unattended agent work could be
+    // credited. The Claude stream in RepoActivityMonitor does that now, and it does it without
+    // claiming the user is at the desk.
     [Fact]
-    public void Claude_active_keeps_state_active_past_idle_threshold()
+    public void Idle_past_threshold_goes_idle()
     {
         var sm = New(600);
-        sm.Observe(idleSeconds: 9_999, isLocked: false, claudeActive: true);
-        sm.Current.Should().Be(UserActivityState.Active);
-    }
-
-    [Fact]
-    public void Claude_active_does_not_override_lock()
-    {
-        var sm = New(600);
-        sm.Observe(idleSeconds: 5, isLocked: true, claudeActive: true);
-        sm.Current.Should().Be(UserActivityState.Idle);
-    }
-
-    [Fact]
-    public void Claude_inactive_with_idle_past_threshold_goes_idle()
-    {
-        var sm = New(600);
-        sm.Observe(idleSeconds: 700, isLocked: false, claudeActive: false);
+        sm.Observe(idleSeconds: 700, isLocked: false);
         sm.Current.Should().Be(UserActivityState.Idle);
     }
 
