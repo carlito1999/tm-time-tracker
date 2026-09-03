@@ -31,6 +31,15 @@ public sealed class TicketEstimationWorker : BackgroundService
     private const int MaxWriteAttempts = 2;
     private const int CalibrationCommits = 25;
 
+    /// <summary>
+    /// Tickets estimated per repo per sweep. A first run against an existing backlog would
+    /// otherwise work through every To-Do ticket back to back, each up to ten minutes and a
+    /// couple of dollars, on the same subscription quota the user's own Claude sessions draw
+    /// from - locking them out of their own tooling on the day they are testing this. The loop
+    /// drains the rest on later sweeps.
+    /// </summary>
+    private const int MaxTicketsPerSweep = 3;
+
     private readonly TrackedRepoRepository _repos;
     private readonly RepoProjectRepository _mappings;
     private readonly TicketEstimateRepository _estimates;
@@ -121,6 +130,14 @@ public sealed class TicketEstimationWorker : BackgroundService
         }
 
         if (outstanding.Count == 0) return;
+
+        if (outstanding.Count > MaxTicketsPerSweep)
+        {
+            _log.LogInformation(
+                "{Count} tickets await estimation in {Project}; taking {Take} this sweep",
+                outstanding.Count, project, MaxTicketsPerSweep);
+            outstanding = outstanding.Take(MaxTicketsPerSweep).ToList();
+        }
 
         string worktree;
         try
@@ -281,7 +298,8 @@ public sealed class TicketEstimationWorker : BackgroundService
         {
             WarnRepoOnce(repoPath, "unmapped",
                 $"No Jira project matches {Name(repoPath)}",
-                "Pick its project on the Repositories tab in Settings and estimates will start.",
+                "Estimation is skipped for this repo. The folder name has to match a Jira board "
+                + "name for it to be found automatically.",
                 urgent: false);
             return null;
         }

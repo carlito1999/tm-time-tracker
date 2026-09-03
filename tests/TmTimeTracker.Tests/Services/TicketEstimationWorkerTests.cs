@@ -387,6 +387,41 @@ public class TicketEstimationWorkerTests
         h.Notifier.Verify(n => n.Show(It.IsAny<string>(), It.IsAny<string>(), true), Times.Once);
     }
 
+    /// <summary>
+    /// A first run against an existing backlog would otherwise estimate every To-Do ticket back
+    /// to back, each up to ten minutes, on the same subscription quota the user's own Claude
+    /// sessions draw from. Later sweeps drain the rest.
+    /// </summary>
+    [Fact]
+    public async Task Estimates_at_most_a_few_tickets_per_sweep()
+    {
+        var backlog = Enumerable.Range(1, 12).Select(i => Issue($"TM-{i}")).ToArray();
+        var h = Build(issues: backlog,
+            claudeOutputs: new Queue<string>(Enumerable.Repeat(Output(), 12)));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Claude.Invocations.Count.Should().BeLessThan(backlog.Length);
+        h.Estimates.GetAll().Count(r => r.Status == EstimateStatus.Done)
+            .Should().BeLessThan(backlog.Length);
+    }
+
+    [Fact]
+    public async Task Works_through_the_backlog_over_successive_sweeps()
+    {
+        var backlog = Enumerable.Range(1, 5).Select(i => Issue($"TM-{i}")).ToArray();
+        var h = Build(issues: backlog,
+            claudeOutputs: new Queue<string>(Enumerable.Repeat(Output(), 10)));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+        var afterFirst = h.Estimates.GetAll().Count(r => r.Status == EstimateStatus.Done);
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Estimates.GetAll().Count(r => r.Status == EstimateStatus.Done)
+            .Should().BeGreaterThan(afterFirst);
+    }
+
     // One unusable repo or ticket must not stop the rest of the sweep.
     [Fact]
     public async Task Carries_on_with_other_tickets_after_one_fails()
