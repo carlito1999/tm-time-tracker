@@ -18,7 +18,8 @@ The estimate must be an honest best guess: neither padded nor optimistic.
 |---|---|---|
 | Where the estimate goes | Jira `timetracking.originalEstimate` | User's call. It becomes real project data. |
 | Overwrite protection | Write **only when the field is empty** | Never clobber a human estimate. Also makes the 5-minute loop idempotent without a confirmation dialog. |
-| Repo to Jira project | Match repo folder name against project **display name**, normalised | Boards are 1:1 with repo names (`training-manager` to "Training Manager"). Key matching is a secondary pass. |
+| Repo to Jira project | Tiered: exact display name, then exact key, then prefix either direction; a hand-set mapping always wins | See Project matching. |
+| Ticket attachments | Images and PDFs downloaded into the worktree; spreadsheets converted to text | A ticket's description is often nothing but a screenshot. See Attachments. |
 | Claude auth | Ambient CLI login; optional token override | Works out of the box. Token field on the OAuth tab covers the headless-daemon case where the interactive login has expired. |
 | Where Claude runs | Detached `git worktree` under `%LOCALAPPDATA%\TmTimeTracker\estimates\<repo>` | Prevents the estimator from corrupting the app's own time tracking (see Isolation). Also guarantees the user's working copy is untouched. |
 | Which revision | Newest branch in the repo's trunk *family*, after `git fetch` | origin/HEAD proved unreliable - see Trunk selection. |
@@ -140,6 +141,43 @@ notification naming the branch, rather than estimated.
 
 `repo_branch` holds an optional per-repo override for a repo neither rule fits.
 
+## Project matching
+
+Three tiers, strongest first, each consulted only when the previous found nothing. A tier that
+finds several candidates stops the search rather than falling through to a looser rule.
+
+1. Exact normalised display name - `training-manager` to "Training Manager".
+2. Exact normalised project key.
+3. Prefix either direction - `dynatag` to "Dynatag-Codes".
+
+The ordering is load-bearing. This account has both "Sheeponline" and "SheepOnline New", and the
+repo `sheeponline-new` extends the first while exactly matching the second; resolving exact names
+first is what stops the older board winning.
+
+Pairings no rule can infer - `payload-site` is tracked in a board called "New site" - are set by
+hand on the Repositories tab and stored with `auto_matched = 0`, so the matcher never replaces
+them.
+
+## Attachments
+
+TM-50's entire description is a single ADF media node carrying no text: flattening it yields an
+empty string, and the ticket was estimated from its summary alone. The attachment is frequently
+the only statement of what the work is.
+
+Readable attachments are downloaded into the worktree - inside it, because the run is sandboxed
+to its working directory - and named in the prompt. Images and PDFs Claude reads natively. A
+spreadsheet it cannot: the run is `--restricted`, with no Bash or REPL to open a workbook, so
+`XlsxText` extracts the text (an `.xlsx` is a zip of XML, needing no new dependency) and writes
+it beside as `.txt`. CSV and other text arrive as-is.
+
+Bounded throughout, because attachments come from whoever filed the ticket: a fixed set of kinds,
+six files per ticket, per-kind size ceilings, and filenames reduced to a bare name before they
+build a path. Kind is decided by extension before MIME, since Jira reports many uploads as
+`application/octet-stream`. No attachment failure fails an estimate.
+
+Verified live on TM-50: the rationale cited `SmartyModifiers.php:202`, a line number that exists
+only in the stack trace inside the screenshot, and reconciled it against the current source.
+
 ## Verification chain
 
 A ticket reaches `done` only when all four gates pass.
@@ -257,7 +295,7 @@ from `HKCU\Run` where a user-local bin directory may not be on PATH.
 
 - Re-estimating when a ticket's description changes (store Jira `updated` if wanted later).
 - A dashboard panel for estimates.
-- A project picker on the Repositories tab. Auto-matching covers the 1:1 naming in use, and an
-  unmatched repo raises a notification.
+- Waiting on PollServiceGate before the first sweep. The five-minute first tick covers setup in
+  practice; a first run during the wizard could raise one spurious projects-unreadable toast.
 - Estimating anything outside `statusCategory = "To Do"`.
 - Posting the rationale to Jira as a comment.
