@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using TmTimeTracker.Configuration;
+using TmTimeTracker.Logic;
 
 namespace TmTimeTracker.Platform;
 
@@ -202,23 +204,43 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
     }
 
     /// <summary>
-    /// The most recently committed remote branch matching any of the given patterns, or null.
-    /// One git call handles every pattern, and origin/HEAD is excluded because it is a symbolic
-    /// alias rather than a branch of its own.
+    /// The latest remote branch matching any of the given patterns, or null.
+    ///
+    /// "Latest" is decided by <see cref="TrunkBranchSelector"/>, which prefers the date stamped
+    /// into the branch name over the commit date - the repos here cut dated trunk snapshots, and
+    /// a hotfix pushed to an old one would otherwise make it look newest.
+    ///
+    /// One git call covers every pattern. origin/HEAD is excluded because it is a symbolic alias
+    /// rather than a branch in its own right.
     /// </summary>
     private async Task<string?> NewestMatchingAsync(string repoPath, IReadOnlyList<string> patterns,
         CancellationToken ct)
     {
         var args = new List<string>
-            { "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)" };
+        {
+            "for-each-ref", "--sort=-committerdate",
+            "--format=%(refname:short)%09%(committerdate:iso8601)"
+        };
         args.AddRange(patterns.Select(p => $"refs/remotes/origin/{p}"));
 
         var matches = await TryRunAsync(repoPath, ct, args.ToArray()).ConfigureAwait(false);
         if (!matches.Ok) return null;
 
-        return matches.Output
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault(r => !r.EndsWith("/HEAD", StringComparison.Ordinal));
+        var candidates = new List<BranchCandidate>();
+        foreach (var line in matches.Output.Split('\n',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = line.Split('\t');
+            if (parts.Length < 2) continue;
+            if (parts[0].EndsWith("/HEAD", StringComparison.Ordinal)) continue;
+
+            // An unparseable date must not drop the branch: it can still win on its name stamp.
+            DateTime.TryParse(parts[1], CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var committed);
+            candidates.Add(new BranchCandidate(parts[0], committed));
+        }
+
+        return TrunkBranchSelector.Select(candidates);
     }
 
     private async Task RunAsync(string cwd, CancellationToken ct, params string[] args)
