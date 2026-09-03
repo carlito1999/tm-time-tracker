@@ -105,3 +105,10 @@ CREATE TABLE IF NOT EXISTS jira_api_token (
     email       TEXT NOT NULL,
     token_dpapi BLOB NOT NULL
 );
+
+-- The Bitbucket REST API needs its own token: the Jira one is scopeless and Bitbucket rejects it.
+CREATE TABLE IF NOT EXISTS bitbucket_api_token (
+    id          INTEGER PRIMARY KEY CHECK(id = 1),
+    email       TEXT NOT NULL,
+    token_dpapi BLOB NOT NULL
+);

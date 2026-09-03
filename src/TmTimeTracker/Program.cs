@@ -35,6 +35,8 @@ if (args.Length == 2 && args[0] == "--probe-devstatus")
     { await RunCli(b => b, h => RunDevStatusProbe(h, args[1])); return; }
 if (args.Length == 3 && args[0] == "--set-jira-token")
     { await RunCli(b => b, h => SetJiraToken(h, args[1], args[2])); return; }
+if (args.Length == 3 && args[0] == "--set-bitbucket-token")
+    { await RunCli(b => b, h => SetBitbucketToken(h, args[1], args[2])); return; }
 // The overdue warning cannot fire until the read:dev-info:jira scope is granted, so this is the
 // only way to see a real toast come out of the published exe.
 if (args.Length == 1 && args[0] == "--test-toast")
@@ -220,6 +222,13 @@ static async Task SetJiraToken(IHost host, string email, string token)
 {
     host.Services.GetRequiredService<JiraApiTokenRepository>().Save(email, token);
     Console.WriteLine($"Stored Jira API token for {email} (DPAPI-encrypted).");
+    await Task.CompletedTask;
+}
+
+static async Task SetBitbucketToken(IHost host, string email, string token)
+{
+    host.Services.GetRequiredService<BitbucketApiTokenRepository>().Save(email, token);
+    Console.WriteLine($"Stored Bitbucket API token for {email} (DPAPI-encrypted).");
     await Task.CompletedTask;
 }
 

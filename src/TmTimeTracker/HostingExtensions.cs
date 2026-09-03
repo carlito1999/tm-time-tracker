@@ -30,6 +30,7 @@ public static class HostingExtensions
             services.AddSingleton<JiraSiteRepository>();
             services.AddSingleton<PrAnnouncementRepository>();
             services.AddSingleton<JiraApiTokenRepository>();
+            services.AddSingleton<BitbucketApiTokenRepository>();
             // The balloon is only the fallback now, live once the tray icon attaches; a no-op in
             // the headless CLI modes. Toasts work in every mode, tray icon or not.
             services.AddSingleton<TmTimeTracker.UI.TrayBalloonNotifier>();

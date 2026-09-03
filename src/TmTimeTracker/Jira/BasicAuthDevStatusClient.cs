@@ -78,6 +78,6 @@ public sealed class BasicAuthDevStatusClient : IDevStatusSource
                ?? DevStatusResponse.Empty;
     }
 
-    internal static string Encode(JiraApiCredential credential) =>
+    internal static string Encode(AtlassianCredential credential) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes($"{credential.Email}:{credential.Token}"));
 }
