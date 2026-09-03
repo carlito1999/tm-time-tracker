@@ -22,10 +22,22 @@ public sealed record StatusCategory(
     [property: JsonPropertyName("key")] string Key,
     [property: JsonPropertyName("name")] string Name);
 
-// Summary is optional with a default so existing construction sites keep compiling.
+// Optional members carry defaults and stay last so existing construction sites keep compiling.
+// Description is a JsonElement because Jira v3 returns Atlassian Document Format - a nested
+// tree, not a string. Flatten it with AdfText.
 public sealed record IssueFields(
     [property: JsonPropertyName("status")] IssueStatus Status,
-    [property: JsonPropertyName("summary")] string? Summary = null);
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("timetracking")] JiraTimeTracking? TimeTracking = null,
+    [property: JsonPropertyName("description")] System.Text.Json.JsonElement? Description = null);
+
+// originalEstimateSeconds is the field gate 4 compares against: Jira accepts a write expressed
+// in its own duration syntax but reports the stored value back in seconds.
+public sealed record JiraTimeTracking(
+    [property: JsonPropertyName("originalEstimateSeconds")] int? OriginalEstimateSeconds);
+
+public sealed record JiraSearchResponse(
+    [property: JsonPropertyName("issues")] Issue[]? Issues);
 
 public sealed record JiraProject(
     [property: JsonPropertyName("key")] string Key,
