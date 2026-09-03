@@ -167,6 +167,7 @@ public static class HostingExtensions
         {
             services.AddSingleton<ClaudeAuthRepository>();
             services.AddSingleton<RepoProjectRepository>();
+            services.AddSingleton<RepoBranchRepository>();
             services.AddSingleton<TicketEstimateRepository>();
             services.AddSingleton(new ClaudeEstimatorOptions());
             services.AddSingleton<IClaudeEstimator, ClaudeCliEstimator>();

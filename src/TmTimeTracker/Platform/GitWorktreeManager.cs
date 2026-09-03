@@ -42,7 +42,8 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
     public string PathFor(string repoPath) =>
         Path.Combine(_estimatesRoot, Sanitise(Path.GetFileName(repoPath.TrimEnd('/', '\\'))));
 
-    public async Task<string> PrepareAsync(string repoPath, CancellationToken ct)
+    public async Task<string> PrepareAsync(string repoPath, string? branchPattern,
+        CancellationToken ct)
     {
         if (!Directory.Exists(repoPath))
             throw new GitWorktreeException($"Repository path does not exist: {repoPath}");
@@ -54,7 +55,7 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
         // whatever this clone last saw.
         await RunAsync(repoPath, ct, "fetch", "--quiet", "origin");
 
-        var reference = await ResolveDefaultBranchAsync(repoPath, ct);
+        var reference = await ResolveBranchAsync(repoPath, branchPattern, ct);
 
         // A worktree left behind by the previous sweep would make `worktree add` fail outright.
         Detach(repoPath, target);
@@ -140,25 +141,84 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
     }
 
     /// <summary>
-    /// origin/HEAD is set by clone but is missing from repos whose remote was added later, so
-    /// the well-known names are probed before giving up.
+    /// Picks the branch to estimate against: an explicit override if one is configured, else the
+    /// remote's default.
     /// </summary>
+    private async Task<string> ResolveBranchAsync(string repoPath, string? branchPattern,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(branchPattern))
+            return await ResolveDefaultBranchAsync(repoPath, ct).ConfigureAwait(false);
+
+        var pattern = branchPattern.Trim();
+        if (!pattern.Contains('*', StringComparison.Ordinal))
+            return $"origin/{pattern}";
+
+        // Newest match wins, resolved fresh on every sweep so a rolling convention keeps working.
+        var newest = await NewestMatchingAsync(repoPath, new[] { pattern }, ct).ConfigureAwait(false);
+
+        if (newest is null)
+            throw new GitWorktreeException(
+                $"No remote branch matches '{pattern}' in {repoPath}.");
+
+        _log.LogDebug("Branch pattern {Pattern} resolved to {Branch}", pattern, newest);
+        return newest;
+    }
+
+    /// <summary>
+    /// Finds the branch carrying current trunk work, without needing per-repo configuration.
+    ///
+    /// origin/HEAD is not reliable for this. One tracked repo points it at "mainTraining", a stub
+    /// holding a single .gitignore from an Initial commit, while live work lands on rolling dated
+    /// branches (dev-01-09-2026, dev-31-08-2026, ...). Trusting origin/HEAD there produced an
+    /// estimate of an empty directory.
+    ///
+    /// So the trunk-shaped names are enumerated and the most recently committed one wins. That
+    /// picks master in a repo that only has master, and the newest dev snapshot in a repo that
+    /// cuts them by date - and it keeps working when the next one is cut. Note the stub above is
+    /// itself matched by "main*"; it loses on date, which is exactly the intended behaviour.
+    ///
+    /// origin/HEAD remains the fallback for a repo whose trunk is named something else entirely.
+    /// </summary>
+    private static readonly string[] TrunkPatterns = { "main*", "master*", "dev*", "develop*" };
+
     private async Task<string> ResolveDefaultBranchAsync(string repoPath, CancellationToken ct)
     {
+        var newest = await NewestMatchingAsync(repoPath, TrunkPatterns, ct).ConfigureAwait(false);
+        if (newest is not null)
+        {
+            _log.LogDebug("Trunk branch for {Repo} resolved to {Branch}", repoPath, newest);
+            return newest;
+        }
+
         var symbolic = await TryRunAsync(repoPath, ct,
             "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD");
         if (symbolic.Ok && symbolic.Output.StartsWith("refs/remotes/", StringComparison.Ordinal))
             return symbolic.Output["refs/remotes/".Length..];
 
-        foreach (var candidate in new[] { "origin/main", "origin/master" })
-        {
-            var probe = await TryRunAsync(repoPath, ct,
-                "rev-parse", "--verify", "--quiet", candidate);
-            if (probe.Ok && probe.Output.Length > 0) return candidate;
-        }
-
         throw new GitWorktreeException(
-            $"Could not determine the default branch of {repoPath}; no origin/HEAD, origin/main or origin/master.");
+            $"Could not find a trunk branch in {repoPath}: nothing matching main, master or dev, "
+            + "and no origin/HEAD.");
+    }
+
+    /// <summary>
+    /// The most recently committed remote branch matching any of the given patterns, or null.
+    /// One git call handles every pattern, and origin/HEAD is excluded because it is a symbolic
+    /// alias rather than a branch of its own.
+    /// </summary>
+    private async Task<string?> NewestMatchingAsync(string repoPath, IReadOnlyList<string> patterns,
+        CancellationToken ct)
+    {
+        var args = new List<string>
+            { "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)" };
+        args.AddRange(patterns.Select(p => $"refs/remotes/origin/{p}"));
+
+        var matches = await TryRunAsync(repoPath, ct, args.ToArray()).ConfigureAwait(false);
+        if (!matches.Ok) return null;
+
+        return matches.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(r => !r.EndsWith("/HEAD", StringComparison.Ordinal));
     }
 
     private async Task RunAsync(string cwd, CancellationToken ct, params string[] args)

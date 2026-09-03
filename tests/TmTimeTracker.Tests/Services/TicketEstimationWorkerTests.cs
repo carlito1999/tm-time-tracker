@@ -109,7 +109,8 @@ public class TicketEstimationWorkerTests
                   "", TimedOut: false));
 
         var worktrees = new Mock<IGitWorktreeManager>();
-        worktrees.Setup(w => w.PrepareAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        worktrees.Setup(w => w.PrepareAsync(It.IsAny<string>(), It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
                  .ReturnsAsync(@"C:\estimates\training-manager");
         worktrees.Setup(w => w.RecentCommitSubjectsAsync(It.IsAny<string>(), It.IsAny<int>(),
                     It.IsAny<CancellationToken>()))
@@ -119,7 +120,8 @@ public class TicketEstimationWorkerTests
 
         return new Harness
         {
-            Worker = new TicketEstimationWorker(repos, mappings, estimates, search.Object,
+            Worker = new TicketEstimationWorker(repos, mappings,
+                new RepoBranchRepository(factory), estimates, search.Object,
                 reader.Object, writer.Object, projectSource.Object, claude.Object,
                 worktrees.Object, notifier.Object, new FixedClock(),
                 NullLogger<TicketEstimationWorker>.Instance),
@@ -378,7 +380,8 @@ public class TicketEstimationWorkerTests
     public async Task Notifies_when_the_worktree_cannot_be_prepared()
     {
         var h = Build();
-        h.Worktrees.Setup(w => w.PrepareAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        h.Worktrees.Setup(w => w.PrepareAsync(It.IsAny<string>(), It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
                    .ThrowsAsync(new GitWorktreeException("no origin"));
 
         await h.Worker.RunOnceAsync(CancellationToken.None);

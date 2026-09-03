@@ -151,3 +151,13 @@ CREATE TABLE IF NOT EXISTS ticket_estimate (
     estimated_at   TEXT,
     warned_at      TEXT
 );
+
+-- Optional per-repo override for the branch estimates run against. Needed because a repo's
+-- origin/HEAD is not always the branch carrying the code: one tracked repo points origin/HEAD at
+-- a stub while real work lands on rolling dated branches (dev-01-09-2026, dev-31-08-2026, ...).
+-- A pattern containing '*' resolves to the most recently committed matching remote branch, so a
+-- rolling convention keeps working without anyone editing this.
+CREATE TABLE IF NOT EXISTS repo_branch (
+    repo_path      TEXT PRIMARY KEY COLLATE NOCASE,
+    branch_pattern TEXT NOT NULL
+);

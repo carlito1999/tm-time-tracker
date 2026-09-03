@@ -42,6 +42,7 @@ public sealed class TicketEstimationWorker : BackgroundService
 
     private readonly TrackedRepoRepository _repos;
     private readonly RepoProjectRepository _mappings;
+    private readonly RepoBranchRepository _branches;
     private readonly TicketEstimateRepository _estimates;
     private readonly IJiraSearchSource _search;
     private readonly IJiraIssueSource _issues;
@@ -60,12 +61,14 @@ public sealed class TicketEstimationWorker : BackgroundService
 
     public TicketEstimationWorker(
         TrackedRepoRepository repos, RepoProjectRepository mappings,
+        RepoBranchRepository branches,
         TicketEstimateRepository estimates, IJiraSearchSource search,
         IJiraIssueSource issues, IJiraEstimateWriter writer, IJiraProjectSource projects,
         IClaudeEstimator claude, IGitWorktreeManager worktrees, IUserNotifier notifier,
         IClock clock, ILogger<TicketEstimationWorker> log)
     {
-        _repos = repos; _mappings = mappings; _estimates = estimates; _search = search;
+        _repos = repos; _mappings = mappings; _branches = branches;
+        _estimates = estimates; _search = search;
         _issues = issues; _writer = writer; _projects = projects; _claude = claude;
         _worktrees = worktrees; _notifier = notifier; _clock = clock; _log = log;
     }
@@ -144,7 +147,8 @@ public sealed class TicketEstimationWorker : BackgroundService
         string worktree;
         try
         {
-            worktree = await _worktrees.PrepareAsync(repoPath, ct).ConfigureAwait(false);
+            worktree = await _worktrees
+                .PrepareAsync(repoPath, _branches.Find(repoPath), ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

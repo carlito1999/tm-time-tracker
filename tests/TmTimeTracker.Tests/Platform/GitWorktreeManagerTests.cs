@@ -37,7 +37,9 @@ public class GitWorktreeManagerTests : IDisposable
         foreach (var name in new[] { "a.cs", "b.cs", "c.cs", "d.cs", "e.cs" })
             File.WriteAllText(Path.Combine(_origin, "src", name), $"// {name}");
         Git(_origin, "add -A");
-        Git(_origin, "commit -m first");
+        // Dated rather than "now" so tests about which branch is newest can place their own
+        // branches on either side of it.
+        Git(_origin, "commit -m first", committerDate: "2026-01-01T10:00:00");
 
         Git(_root, $"clone --quiet \"{_origin}\" \"{_clone}\"");
         Git(_clone, "config user.email test@example.com");
@@ -57,7 +59,7 @@ public class GitWorktreeManagerTests : IDisposable
         Directory.Delete(path, recursive: true);
     }
 
-    private static string Git(string cwd, string args)
+    private static string Git(string cwd, string args, string? committerDate = null)
     {
         var psi = new ProcessStartInfo("git", args)
         {
@@ -67,6 +69,13 @@ public class GitWorktreeManagerTests : IDisposable
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        // for-each-ref sorts by committer date to a one-second resolution, so commits made in
+        // the same second would tie and the "newest branch" assertion would be meaningless.
+        if (committerDate is not null)
+        {
+            psi.Environment["GIT_COMMITTER_DATE"] = committerDate;
+            psi.Environment["GIT_AUTHOR_DATE"] = committerDate;
+        }
         using var p = Process.Start(psi)!;
         var stdout = p.StandardOutput.ReadToEnd();
         var stderr = p.StandardError.ReadToEnd();
@@ -81,7 +90,7 @@ public class GitWorktreeManagerTests : IDisposable
     [Fact]
     public async Task Creates_a_worktree_holding_the_repository_content()
     {
-        var path = await New().PrepareAsync(_clone, CancellationToken.None);
+        var path = await New().PrepareAsync(_clone, null, CancellationToken.None);
 
         Directory.Exists(path).Should().BeTrue();
         File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
@@ -90,7 +99,7 @@ public class GitWorktreeManagerTests : IDisposable
     [Fact]
     public async Task Places_the_worktree_outside_the_tracked_repository()
     {
-        var path = await New().PrepareAsync(_clone, CancellationToken.None);
+        var path = await New().PrepareAsync(_clone, null, CancellationToken.None);
 
         path.Should().StartWith(_estimates);
         path.Should().NotStartWith(_clone);
@@ -105,7 +114,7 @@ public class GitWorktreeManagerTests : IDisposable
         Git(_clone, "add -A");
         Git(_clone, "commit -m local-only");
 
-        var path = await New().PrepareAsync(_clone, CancellationToken.None);
+        var path = await New().PrepareAsync(_clone, null, CancellationToken.None);
 
         File.Exists(Path.Combine(path, "scratch.txt")).Should().BeFalse();
         File.ReadAllText(Path.Combine(path, "README.md")).Should().Be("on master");
@@ -120,7 +129,7 @@ public class GitWorktreeManagerTests : IDisposable
         Git(_origin, "add -A");
         Git(_origin, "commit -m second");
 
-        var path = await New().PrepareAsync(_clone, CancellationToken.None);
+        var path = await New().PrepareAsync(_clone, null, CancellationToken.None);
 
         File.ReadAllText(Path.Combine(path, "README.md")).Should().Be("updated on master");
     }
@@ -137,7 +146,7 @@ public class GitWorktreeManagerTests : IDisposable
         var head = Path.Combine(_clone, ".git", "HEAD");
         var before = File.GetLastWriteTimeUtc(head);
 
-        await New().PrepareAsync(_clone, CancellationToken.None);
+        await New().PrepareAsync(_clone, null, CancellationToken.None);
 
         File.GetLastWriteTimeUtc(head).Should().Be(before);
     }
@@ -148,9 +157,9 @@ public class GitWorktreeManagerTests : IDisposable
     public async Task Preparing_twice_succeeds()
     {
         var manager = New();
-        var first = await manager.PrepareAsync(_clone, CancellationToken.None);
+        var first = await manager.PrepareAsync(_clone, null, CancellationToken.None);
 
-        var second = await manager.PrepareAsync(_clone, CancellationToken.None);
+        var second = await manager.PrepareAsync(_clone, null, CancellationToken.None);
 
         second.Should().Be(first);
         File.Exists(Path.Combine(second, "README.md")).Should().BeTrue();
@@ -160,7 +169,7 @@ public class GitWorktreeManagerTests : IDisposable
     public async Task Removes_the_worktree()
     {
         var manager = New();
-        var path = await manager.PrepareAsync(_clone, CancellationToken.None);
+        var path = await manager.PrepareAsync(_clone, null, CancellationToken.None);
 
         manager.Remove(_clone);
 
@@ -196,10 +205,94 @@ public class GitWorktreeManagerTests : IDisposable
         Git(stub, "commit -m \"Initial commit\"");
         Git(_root, $"clone --quiet \"{stub}\" \"{stubClone}\"");
 
-        var prepare = async () => await New().PrepareAsync(stubClone, CancellationToken.None);
+        var prepare = async () => await New().PrepareAsync(stubClone, null, CancellationToken.None);
 
         (await prepare.Should().ThrowAsync<GitWorktreeException>())
             .WithMessage("*no code to estimate*");
+    }
+
+    /// <summary>
+    /// The live shape that broke this: origin/HEAD points at a stub "mainTraining" branch while
+    /// real work lands on rolling dated dev branches. No configuration should be needed - the
+    /// newest trunk-shaped branch wins, and the stub loses on date even though "main*" matches it.
+    /// </summary>
+    [Fact]
+    public async Task Prefers_the_newest_trunk_branch_over_a_stale_default()
+    {
+        Git(_origin, "checkout -q -b mainTraining");
+        Git(_origin, "rm -q -r --cached .");
+        foreach (var f in Directory.GetFiles(Path.Combine(_origin, "src"))) File.Delete(f);
+        File.Delete(Path.Combine(_origin, "README.md"));
+        File.WriteAllText(Path.Combine(_origin, ".gitignore"), "vendor/");
+        Git(_origin, "add -A");
+        Git(_origin, "commit -m \"Initial commit\"", committerDate: "2025-10-15T10:00:00");
+
+        Git(_origin, "checkout -q master");
+        Git(_origin, "checkout -q -b dev-01-09-2026");
+        File.WriteAllText(Path.Combine(_origin, "which.txt"), "live work");
+        Git(_origin, "add -A");
+        Git(_origin, "commit -m live", committerDate: "2026-09-01T10:00:00");
+
+        Git(_clone, "fetch -q origin");
+        Git(_clone, "remote set-head origin mainTraining");
+
+        var path = await New().PrepareAsync(_clone, null, CancellationToken.None);
+
+        File.Exists(Path.Combine(path, "which.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// A repo whose trunk is not its default branch. One tracked repo points origin/HEAD at a
+    /// stub while real work lands on rolling dated branches, so the override names the branch.
+    /// </summary>
+    [Fact]
+    public async Task Uses_an_exact_branch_override()
+    {
+        Git(_origin, "checkout -q -b release");
+        File.WriteAllText(Path.Combine(_origin, "release-only.txt"), "shipped");
+        Git(_origin, "add -A");
+        Git(_origin, "commit -m release-work");
+        Git(_clone, "fetch -q origin");
+
+        var path = await New().PrepareAsync(_clone, "release", CancellationToken.None);
+
+        File.Exists(Path.Combine(path, "release-only.txt")).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The real motivating case: a repo cuts dev-01-09-2026, dev-31-08-2026 and so on, so no
+    /// fixed name stays correct. The pattern resolves to whichever matching branch was committed
+    /// to most recently, and keeps working when the next one is cut.
+    /// </summary>
+    [Fact]
+    public async Task Resolves_a_wildcard_override_to_the_newest_matching_branch()
+    {
+        Git(_origin, "checkout -q -b dev-01-01-2026");
+        File.WriteAllText(Path.Combine(_origin, "which.txt"), "older");
+        Git(_origin, "add -A");
+        Git(_origin, "commit -m older-dev", committerDate: "2026-01-01T10:00:00");
+
+        Git(_origin, "checkout -q -b dev-02-09-2026");
+        File.WriteAllText(Path.Combine(_origin, "which.txt"), "newer");
+        Git(_origin, "add -A");
+        Git(_origin, "commit -m newer-dev", committerDate: "2026-09-02T10:00:00");
+
+        Git(_clone, "fetch -q origin");
+
+        var path = await New().PrepareAsync(_clone, "dev-*", CancellationToken.None);
+
+        File.ReadAllText(Path.Combine(path, "which.txt")).Should().Be("newer");
+    }
+
+    [Fact]
+    public async Task Reports_an_override_that_matches_no_branch()
+    {
+        var prepare = async () =>
+            await New().PrepareAsync(_clone, "nosuchbranch-*", CancellationToken.None);
+
+        (await prepare.Should().ThrowAsync<GitWorktreeException>())
+            .WithMessage("*nosuchbranch-*");
     }
 
     // A repo with no remote cannot be brought to latest main, and the sweep needs to hear about
@@ -216,7 +309,7 @@ public class GitWorktreeManagerTests : IDisposable
         Git(noRemote, "add -A");
         Git(noRemote, "commit -m only");
 
-        var prepare = async () => await New().PrepareAsync(noRemote, CancellationToken.None);
+        var prepare = async () => await New().PrepareAsync(noRemote, null, CancellationToken.None);
 
         await prepare.Should().ThrowAsync<GitWorktreeException>();
     }

@@ -7,7 +7,12 @@ public sealed class GitWorktreeException : Exception
 
 public interface IGitWorktreeManager
 {
-    Task<string> PrepareAsync(string repoPath, CancellationToken ct);
+    /// <param name="branchPattern">
+    /// Branch to estimate against, or null for the remote's default. A value containing '*'
+    /// resolves to the most recently committed matching remote branch, which is what keeps a
+    /// rolling convention like dev-01-09-2026 working without anyone updating a setting.
+    /// </param>
+    Task<string> PrepareAsync(string repoPath, string? branchPattern, CancellationToken ct);
     void Remove(string repoPath);
 
     /// <summary>
