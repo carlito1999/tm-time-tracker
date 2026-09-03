@@ -250,3 +250,68 @@ the same repo the resolver picked (avoiding a redundant resolve).
 - 60-second activity window is hard-coded. If too aggressive (treats brief 50s pauses as "still working"), could be made configurable. Not in v1.
 - Claude Code hook integration (`Stop`/`UserPromptSubmit` POST to local listener) — instant signal, but adds setup friction. Deferred unless polling proves laggy.
 - Per-project slug verification — if Claude Code changes its slug derivation in a future version, ours diverges. Currently no fallback to scan all slugs for path-substring match. YAGNI for v1.
+
+---
+
+## 11. Amendment, 2026-09-03 — session status supersedes the mtime window
+
+§10 asked whether the 60-second window was "too aggressive". It was the opposite
+problem, and the deferred hook integration was chasing the right thing for the
+wrong reason.
+
+### What was wrong
+
+Claude Code appends to `*.jsonl` when a message completes, so the mtime **freezes
+for the whole duration of a tool call**. Measured inside a single 100 s Bash call
+the mtime sat 77 s stale; a sweep of every directory under `~/.claude` during a
+75 s call found exactly one write, at the *start* of the call. There is no
+heartbeat file, so no polling interval could have fixed this.
+
+Two symptoms, one cause:
+
+- The dashboard badge read "Claude idle" after sixty seconds of any tool call.
+- `RepoActivityMonitor` credits a Claude repo only when a write lands since the
+  last tick, and the tick is one minute — so a ten-minute test run earned
+  **zero** minutes. That was the real damage; the badge was the visible half.
+
+### What we read now
+
+`~/.claude/sessions/<pid>.json`, maintained by Claude Code itself:
+
+```json
+{ "pid": 13328, "cwd": "C:\projects\tm-time-tracker",
+  "procStart": "134329052784643818", "status": "busy" }
+```
+
+`status` is a **latch, not a heartbeat** — measured `busy` across an entire 80 s
+call with the file's own mtime frozen, flipping to `idle` when the turn ends.
+`cwd` gives the repo directly, with no slug round-trip. `pid` + `procStart`
+give liveness.
+
+### Rule
+
+A repo is Claude-active iff **either** its transcript mtime is newer than the
+last tick (§3, unchanged) **or** a live process holds a `busy` session whose
+`cwd` is that repo. `ClaudeRepoActivity.IsActive` is the single decision; the
+aggregator and the badge both call it, because deciding separately is how the
+badge came to disagree with the billing in the first place.
+
+| Decision | Choice | Why |
+| -------- | ------ | --- |
+| Window on the busy signal | **None.** It ends when Claude stops | The user's ask. A timer would cut off long builds, which is the case being fixed |
+| What ends an abandoned run | Process death, verified via `procStart` | A session killed mid-tool-call never writes a stop record, so nothing else would ever end it. A bare pid check would bill forever after pid reuse |
+| Which statuses count | `busy` only, positively matched | Seen: `busy`, `idle`, absent (older builds, fresh sdk-cli files). Anything unrecognised — a future `waiting` for a permission prompt, say — falls through to the mtime rule, so every failure degrades to the old behaviour rather than inventing time |
+| `cwd` matching | Exact, after normalising case and trailing separator | Prefix matching would credit a worktree session to the main checkout's branch — the wrong ticket — and would put two tickets on one repo path, which `TimeAggregator` forbids. Worktrees earn nothing, as before |
+
+### Known consequence
+
+With no cap, a session that Claude Code reports as `busy` while genuinely waiting
+on a human — an unanswered permission prompt — keeps billing until answered.
+Accepted deliberately: the alternative is losing real minutes on every long build,
+and auto mode makes the prompt case rare.
+
+### Verified
+
+Live, against the session this bug was reported from: `SN-279` gained one minute
+per minute, 41 → 46, while its transcript went from 43 s to 359 s stale. Every one
+of those minutes was lost before the change. 500 tests pass.
