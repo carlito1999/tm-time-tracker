@@ -315,4 +315,46 @@ public class TimeAggregatorTests
         public IReadOnlyList<RepoActivity> Sample(DateTime lastTickUtc, bool humanActive) =>
             throw new InvalidOperationException("probe exploded");
     }
+
+    /// <summary>Throws on its first call only, and records the cursor it was handed each time.</summary>
+    private sealed class ThrowsOnceSource : IRepoActivitySource
+    {
+        public int Calls;
+        public DateTime LastSeenCursor;
+        public List<RepoActivity> Next = new();
+
+        public IReadOnlyList<RepoActivity> Sample(DateTime lastTickUtc, bool humanActive)
+        {
+            Calls++;
+            LastSeenCursor = lastTickUtc;
+            if (Calls == 1) throw new InvalidOperationException("probe exploded");
+            return Next.ToList();
+        }
+    }
+
+    // A failed sample must not eat a minute. The cursor bounds which Claude writes count as fresh,
+    // so advancing it past a minute nobody looked at would drop that minute's work for good.
+    [Fact]
+    public async Task A_failed_sample_does_not_advance_the_activity_cursor()
+    {
+        var ds = SharedSqlite.NewInMemory();
+        new DatabaseInitializer(ds).EnsureCreated();
+        var tickets = new TicketTimeRepository(ds);
+        var clock = new FakeClock();
+        var src = new ThrowsOnceSource { Next = { On(RepoB, "TM-30-y", "TM-30") } };
+        var agg = new TimeAggregator(new EventBus(), src, tickets, clock,
+            NullLogger<TimeAggregator>.Instance);
+        agg.ProcessEvent(new ActivityChanged(UserActivityState.Active, DateTime.UtcNow));
+        var cursorAtStart = clock.UtcNow;
+
+        clock.UtcNow = clock.UtcNow.AddMinutes(1);
+        await agg.TickAsync();          // this one throws inside
+
+        clock.UtcNow = clock.UtcNow.AddMinutes(1);
+        await agg.TickAsync();
+
+        src.LastSeenCursor.Should().Be(cursorAtStart,
+            "the failed minute was never sampled, so its writes must still be in range");
+        Minutes(tickets, "TM-30").Should().Be(1);
+    }
 }

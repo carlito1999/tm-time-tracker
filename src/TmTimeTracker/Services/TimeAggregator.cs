@@ -73,8 +73,11 @@ public sealed class TimeAggregator : BackgroundService
         }
         catch (Exception ex)
         {
+            // Leave the cursor where it is. This minute's Claude writes have not been seen, so
+            // advancing past them would put them permanently out of range - a silent hole in the
+            // timeline. Holding the cursor lets the next tick pick them up instead.
             _log.LogError(ex, "Repo activity sample failed; crediting nothing this tick");
-            sample = Array.Empty<RepoActivity>();
+            return Task.CompletedTask;
         }
         _lastTickUtc = now;
 
