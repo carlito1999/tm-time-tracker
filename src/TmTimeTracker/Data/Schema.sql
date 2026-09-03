@@ -112,3 +112,42 @@ CREATE TABLE IF NOT EXISTS bitbucket_api_token (
     email       TEXT NOT NULL,
     token_dpapi BLOB NOT NULL
 );
+
+-- Which Jira project's board covers a tracked repo. A separate table rather than a column on
+-- tracked_repo: DatabaseInitializer only runs CREATE TABLE IF NOT EXISTS, and SQLite has no
+-- ADD COLUMN IF NOT EXISTS, so a new table stays idempotent with no migration machinery.
+-- auto_matched records whether the mapping was guessed or set by hand, so a user correction
+-- is never silently re-guessed.
+CREATE TABLE IF NOT EXISTS repo_project (
+    repo_path    TEXT PRIMARY KEY COLLATE NOCASE,
+    project_key  TEXT NOT NULL,
+    auto_matched INTEGER NOT NULL DEFAULT 1
+);
+
+-- Optional Claude Code OAuth token from `claude setup-token`, encrypted with the same DPAPI
+-- protector as every other credential. Absent is the normal case: the estimator then inherits
+-- the machine's own Claude Code login.
+CREATE TABLE IF NOT EXISTS claude_auth (
+    id          INTEGER PRIMARY KEY CHECK(id = 1),
+    token_dpapi BLOB NOT NULL
+);
+
+-- One row per ticket ever considered for estimation. Durable rather than in-memory because the
+-- 5-minute sweep would otherwise re-estimate everything after a restart, and because the
+-- attempt cap and the notify-once flag both have to survive one.
+CREATE TABLE IF NOT EXISTS ticket_estimate (
+    ticket_key     TEXT PRIMARY KEY,
+    repo_path      TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    impl_minutes   INTEGER,
+    test_minutes   INTEGER,
+    review_minutes INTEGER,
+    confidence     TEXT,
+    rationale      TEXT,
+    raw_output     TEXT,
+    error          TEXT,
+    failed_gate    TEXT,
+    estimated_at   TEXT,
+    warned_at      TEXT
+);
