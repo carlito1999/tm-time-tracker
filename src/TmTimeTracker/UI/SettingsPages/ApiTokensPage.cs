@@ -154,9 +154,7 @@ public sealed class ApiTokensPage : UserControl
         if (!ok) { Fail(_jira, detail); return; }
 
         _sp.GetRequiredService<JiraApiTokenRepository>().Save(email, token);
-        _jira.Token.Clear();
-        Succeed(_jira, "Saved. Jira accepted the token.");
-        Initialise();
+        Stored(_jira, token, "Jira accepted the token.");
     }
 
     private async Task SaveBitbucketAsync()
@@ -177,9 +175,7 @@ public sealed class ApiTokensPage : UserControl
         }
 
         _sp.GetRequiredService<BitbucketApiTokenRepository>().Save(email, token);
-        _bitbucket.Token.Clear();
-        Succeed(_bitbucket, "Saved. Bitbucket accepted the token.");
-        Initialise();
+        Stored(_bitbucket, token, "Bitbucket accepted the token.");
     }
 
     private bool Validate(TokenSection section, string email, string token)
@@ -224,6 +220,23 @@ public sealed class ApiTokensPage : UserControl
     {
         section.Status.Text = message;
         section.Status.ForeColor = Theme.Accent;
+    }
+
+    /// <summary>
+    /// Confirms a save without leaving the token on screen.
+    ///
+    /// The field is emptied on purpose, but that alone looks identical to losing the input - the
+    /// status line already read "Saved for ..." from the previous token, so nothing appeared to
+    /// happen. The time and the new token's tail are what make the change visible, and the message
+    /// says the clearing was deliberate.
+    /// </summary>
+    private static void Stored(TokenSection section, string token, string message)
+    {
+        section.Token.Clear();
+        var tail = token.Length >= 6 ? token[^6..] : "……";
+        Succeed(section,
+            $"✓ {DateTime.Now:HH:mm} — {message} Saved (ends …{tail}); the box is cleared so the "
+            + "token is not left on screen.");
     }
 
     private void OpenTokenPage()
