@@ -260,18 +260,31 @@ public sealed class PrAnnouncementWorker : BackgroundService
     /// <summary>
     /// Step 4: measured from the branch's last commit rather than from when the ticket was moved,
     /// because the commit is when the pull request became possible. Warns once per ticket.
+    ///
+    /// When Jira knows of no commit at all - a branch never pushed, or never linked to the ticket -
+    /// the deadline falls back to when the ticket entered review. A deadline anchored only on a
+    /// commit that does not exist never arrives, and the user hears nothing about the very message
+    /// they are waiting for.
     /// </summary>
     private void WarnIfOverdue(PrAnnouncement row, DevInfoSnapshot snapshot, string ticketKey)
     {
-        if (row.HasWarned || snapshot.LastCommitUtc is null) return;
-        if (_clock.UtcNow - snapshot.LastCommitUtc.Value.UtcDateTime < WarnAfterLastCommit) return;
+        if (row.HasWarned) return;
+
+        var knowsCommit = snapshot.LastCommitUtc is not null;
+        var since = snapshot.LastCommitUtc?.UtcDateTime ?? row.QueuedAtUtc;
+        if (_clock.UtcNow - since < WarnAfterLastCommit) return;
+
+        var because = knowsCommit
+            ? $"It has been over {WarnAfterLastCommit.TotalMinutes:0} minutes since the last commit "
+              + "and Jira still reports no pull request."
+            : $"It has been over {WarnAfterLastCommit.TotalMinutes:0} minutes in review and Jira "
+              + "reports no branch or pull request at all - the branch may not have been pushed.";
 
         // Urgent, so it still reaches the user under Do Not Disturb: the whole point of this
         // notification is that the announcement is not going to happen without them.
         _notifier.Show(
             $"{ticketKey}: no pull request found",
-            $"It has been over {WarnAfterLastCommit.TotalMinutes:0} minutes since the last commit and "
-            + "Jira still reports no pull request. You may need to announce it yourself.",
+            because + " You may need to announce it yourself.",
             urgent: true);
 
         _announcements.MarkWarned(ticketKey, _clock.UtcNow);

@@ -199,8 +199,10 @@ public class PrAnnouncementWorkerTests
             Times.Once);
     }
 
+    // Not knowing the commit time must never cause a message to be posted without a pull request -
+    // but it must not cause silence either. The ticket keeps waiting; the user gets told.
     [Fact]
-    public async Task Keeps_waiting_when_the_last_commit_time_is_unknown()
+    public async Task Keeps_waiting_but_still_warns_when_the_last_commit_time_is_unknown()
     {
         var h = Build(DevInfoSnapshot.Empty);
         QueueTicket(h);
@@ -209,8 +211,9 @@ public class PrAnnouncementWorkerTests
         var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
 
         outcome.Should().Be(AnnouncementOutcome.Waiting);
-        h.Notifier.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
-            Times.Never);
+        h.Slack.Verify(x => x.PostMessageAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        h.Notifier.Verify(b => b.Show(It.IsAny<string>(), It.IsAny<string>(), true), Times.Once);
     }
 
     // Recovery path: a restart mid-wait must not lose the announcement.
@@ -267,5 +270,23 @@ public class PrAnnouncementWorkerTests
 
         h.Announcements.Find("SN-298").Should()
             .NotBeNull("the ticket is still in Review; only its worklog was submitted");
+    }
+
+    // A branch that was never pushed, or never linked to the ticket, leaves Jira with no commit at
+    // all - so a deadline measured only from the last commit never arrives and the user is told
+    // nothing. Silence is the worst outcome here: the announcement is exactly the thing they are
+    // waiting on.
+    [Fact]
+    public async Task Warns_from_the_queue_time_when_jira_knows_of_no_commit_either()
+    {
+        var h = Build();                       // no pull request, and no last commit
+        QueueTicket(h);
+        PutInReview(h);
+        h.Clock.UtcNow = h.Clock.UtcNow.AddMinutes(11);
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Notifier.Verify(n => n.Show(
+            It.Is<string>(t => t.Contains("SN-298")), It.IsAny<string>(), true), Times.Once);
     }
 }
