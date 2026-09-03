@@ -29,7 +29,13 @@ public class GitWorktreeManagerTests : IDisposable
         Git(_origin, "init --initial-branch=master");
         Git(_origin, "config user.email test@example.com");
         Git(_origin, "config user.name Test");
+
+        // Enough files to read as a codebase rather than a stub branch: PrepareAsync refuses a
+        // checkout with almost nothing in it, and a one-file fixture would be exactly that.
         File.WriteAllText(Path.Combine(_origin, "README.md"), "on master");
+        Directory.CreateDirectory(Path.Combine(_origin, "src"));
+        foreach (var name in new[] { "a.cs", "b.cs", "c.cs", "d.cs", "e.cs" })
+            File.WriteAllText(Path.Combine(_origin, "src", name), $"// {name}");
         Git(_origin, "add -A");
         Git(_origin, "commit -m first");
 
@@ -168,6 +174,32 @@ public class GitWorktreeManagerTests : IDisposable
 
         remove.Should().NotThrow();
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// A live repository had origin/HEAD pointing at a stub branch holding a single .gitignore
+    /// while 2,000 files sat on the active branches. Estimating against it produced a confident
+    /// and completely meaningless number - nothing downstream can distinguish an empty checkout
+    /// from an easy ticket, so it has to be refused here.
+    /// </summary>
+    [Fact]
+    public async Task Refuses_a_default_branch_that_holds_no_code()
+    {
+        var stub = Path.Combine(_root, "stub-origin");
+        var stubClone = Path.Combine(_root, "stub-clone");
+        Directory.CreateDirectory(stub);
+        Git(stub, "init --initial-branch=mainTraining");
+        Git(stub, "config user.email test@example.com");
+        Git(stub, "config user.name Test");
+        File.WriteAllText(Path.Combine(stub, ".gitignore"), "vendor/");
+        Git(stub, "add -A");
+        Git(stub, "commit -m \"Initial commit\"");
+        Git(_root, $"clone --quiet \"{stub}\" \"{stubClone}\"");
+
+        var prepare = async () => await New().PrepareAsync(stubClone, CancellationToken.None);
+
+        (await prepare.Should().ThrowAsync<GitWorktreeException>())
+            .WithMessage("*no code to estimate*");
     }
 
     // A repo with no remote cannot be brought to latest main, and the sweep needs to hear about

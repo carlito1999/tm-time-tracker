@@ -23,6 +23,10 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
 {
     private static readonly TimeSpan GitTimeout = TimeSpan.FromMinutes(5);
 
+    // Below this a checkout is a stub, not a codebase. Low enough that a genuinely tiny repo
+    // still estimates, high enough to catch a placeholder branch holding a .gitignore.
+    private const int MinimumTrackedFiles = 5;
+
     private readonly string _estimatesRoot;
     private readonly ILogger<GitWorktreeManager> _log;
 
@@ -57,8 +61,36 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
 
         await RunAsync(repoPath, ct, "worktree", "add", "--detach", "--quiet", target, reference);
 
+        await EnsureNotEmptyAsync(repoPath, target, reference, ct);
+
         _log.LogDebug("Prepared estimation worktree for {Repo} at {Reference}", repoPath, reference);
         return target;
+    }
+
+    /// <summary>
+    /// Refuses a checkout with no code in it.
+    ///
+    /// A repository's origin/HEAD can point at a stub branch while the real work happens
+    /// elsewhere - one live repo had origin/HEAD on a branch holding a single .gitignore from an
+    /// "Initial commit", with 2,000 files on the active branches. Estimating against that
+    /// produced a confident, structurally valid, completely meaningless number, because nothing
+    /// downstream can tell an empty repository from an easy ticket. Only refusing here can.
+    /// </summary>
+    private async Task EnsureNotEmptyAsync(string repoPath, string target, string reference,
+        CancellationToken ct)
+    {
+        var listed = await TryRunAsync(target, ct, "ls-files");
+        var fileCount = listed.Ok
+            ? listed.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
+            : 0;
+
+        if (fileCount >= MinimumTrackedFiles) return;
+
+        Detach(repoPath, target);
+        throw new GitWorktreeException(
+            $"{reference} holds only {fileCount} tracked file(s), so there is no code to estimate "
+            + "against. Point the repository's default branch at the branch that carries the code "
+            + "(git remote set-head origin <branch>).");
     }
 
     /// <summary>
