@@ -30,10 +30,24 @@ public interface IClaudeEstimator
 /// Overrides PATH lookup. The daemon starts from HKCU\Run, where a user-local bin directory is
 /// usually but not always on PATH.
 /// </param>
+/// <param name="Model">
+/// Sonnet rather than Opus: sizing a ticket is a judgement over code that has already been read,
+/// not a hard reasoning problem, and this runs unattended on the user's own subscription quota.
+/// Together with subagents being disallowed it keeps a run to a fraction of the first live
+/// attempt, which spent over two dollars on one ticket and still ran out.
+///
+/// Deliberately the bare alias "sonnet" and not a pinned name like "claude-sonnet-5". The CLI
+/// resolves an alias to the latest model in that family, so this tracks new Sonnet releases
+/// without anyone editing it. Do not pin a dated model here.
+/// </param>
+/// <param name="MaxBudgetUsd">
+/// A ceiling, not an expectation. It exists so a pathological run stops rather than draining the
+/// quota the user's own Claude sessions share.
+/// </param>
 public sealed record ClaudeEstimatorOptions(
     string? ExecutablePath = null,
-    string? Model = "opus",
-    decimal MaxBudgetUsd = 2.00m,
+    string? Model = "sonnet",
+    decimal MaxBudgetUsd = 3.00m,
     TimeSpan? Timeout = null)
 {
     public TimeSpan EffectiveTimeout => Timeout ?? TimeSpan.FromMinutes(10);

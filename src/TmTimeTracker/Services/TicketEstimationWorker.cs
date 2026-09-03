@@ -108,7 +108,9 @@ public sealed class TicketEstimationWorker : BackgroundService
         var project = await ResolveProjectAsync(repoPath, ct).ConfigureAwait(false);
         if (project is null) return;
 
-        var jql = $"project = \"{project}\" AND statusCategory = \"To Do\" ORDER BY created ASC";
+        // status, not statusCategory: the category "To Do" also covers Backlog, Open and
+        // Selected for Development, which pulled in tickets the user does not consider To Do.
+        var jql = $"project = \"{project}\" AND status = \"To Do\" ORDER BY created ASC";
         var issues = await _search.SearchIssuesAsync(jql, ct).ConfigureAwait(false);
 
         var outstanding = new List<Issue>();
@@ -204,6 +206,8 @@ public sealed class TicketEstimationWorker : BackgroundService
             rawOutput = run.Stdout;
             parse = EstimateResult.Parse(run.Stdout, run.ExitCode);
             if (parse.Ok) break;
+
+            parse = parse with { Error = Detail(parse.Error, run) };
 
             _log.LogWarning("{Ticket} failed the {Gate} gate on attempt {Attempt}: {Error}",
                 issue.Key, parse.FailedGate, attempt, parse.Error);
@@ -324,6 +328,28 @@ public sealed class TicketEstimationWorker : BackgroundService
 
         _notifier.Show($"{ticketKey}: could not estimate", Describe(gate, error), urgent);
         _estimates.MarkWarned(ticketKey, _clock.UtcNow);
+    }
+
+    /// <summary>
+    /// Folds the run's own explanation into the failure. Without stderr and the budget state, a
+    /// run stopped by --max-budget-usd is indistinguishable from a crash: both are "exited with
+    /// code 1", and the actual cause only exists in output the worker was throwing away.
+    /// </summary>
+    private static string Detail(string? error, ClaudeRun run)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(error)) parts.Add(error.Trim());
+        if (run.TimedOut) parts.Add("The run hit its wall-clock timeout.");
+
+        if (run.Stdout.Contains("\"budget_usd\"", StringComparison.Ordinal) ||
+            run.Stderr.Contains("budget", StringComparison.OrdinalIgnoreCase))
+            parts.Add("It looks like the run exhausted its --max-budget-usd allowance.");
+
+        var stderr = run.Stderr.Trim();
+        if (stderr.Length > 0)
+            parts.Add(stderr.Length > 400 ? stderr[..400] + "..." : stderr);
+
+        return string.Join(" ", parts);
     }
 
     private static string Describe(EstimateGate? gate, string error) => gate switch

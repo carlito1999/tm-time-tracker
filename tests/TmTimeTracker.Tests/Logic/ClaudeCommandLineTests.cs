@@ -66,6 +66,17 @@ public class ClaudeCommandLineTests
         Build().Should().Contain("--strict-mcp-config");
     }
 
+    /// <summary>
+    /// Subagent fan-out was the dominant cost in the first live run: one spawned Task spent
+    /// 28k tokens over 24 tool calls before the budget stopped the session. Sizing a ticket
+    /// needs one focused session, not a fleet.
+    /// </summary>
+    [Fact]
+    public void Does_not_let_the_run_spawn_subagents()
+    {
+        Build().Should().ContainInConsecutiveOrder("--disallowedTools", "Task");
+    }
+
     [Fact]
     public void Caps_the_spend_of_a_single_run()
     {

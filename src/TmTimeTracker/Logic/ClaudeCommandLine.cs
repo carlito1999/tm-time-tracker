@@ -34,6 +34,11 @@ public static class ClaudeCommandLine
             // Second barrier - refuses writes even if a tool were to slip past --restricted.
             "--permission-mode", "plan",
 
+            // No subagents. A live run spent 28k tokens and 24 tool calls inside a single
+            // spawned Task before the budget stopped it - fan-out is the dominant cost here, and
+            // one focused session is enough to size a ticket.
+            "--disallowedTools", "Task",
+
             // Without this the child inherits every MCP server the user has connected. A live
             // probe loaded Gmail, Slack, Jira and Drive: 26k tokens of tool definitions on every
             // run, and an estimator able to send mail and edit Jira issues. --restricted does not

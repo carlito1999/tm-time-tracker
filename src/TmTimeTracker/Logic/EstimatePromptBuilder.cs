@@ -61,6 +61,10 @@ public static class EstimatePromptBuilder
                fixing the build.
             3. Assume the normal amount of friction - a test that fails the first time, a
                convention noticed late, one round of review comments. Do not assume a clean run.
+
+            Keep the investigation proportionate. You are sizing the work, not doing it: a
+            focused look at the files that matter is enough, and reading the whole codebase is
+            not. Aim to answer within roughly a dozen tool calls.
             """);
 
         if (recentCommits.Count > 0)

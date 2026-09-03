@@ -176,6 +176,21 @@ public class TicketEstimationWorkerTests
         h.Jql.Single().Should().Contain("TM").And.Contain("To Do");
     }
 
+    /// <summary>
+    /// Jira's category "To Do" also covers Backlog, Open and Selected for Development. Searching
+    /// by category pulled in tickets the user does not regard as To Do at all, and each one costs
+    /// a real Claude session.
+    /// </summary>
+    [Fact]
+    public async Task Searches_by_status_not_by_the_broader_status_category()
+    {
+        var h = Build();
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Jql.Single().Should().NotContain("statusCategory");
+    }
+
     [Fact]
     public async Task Cleans_up_the_worktree_afterwards()
     {
