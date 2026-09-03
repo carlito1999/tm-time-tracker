@@ -7,7 +7,13 @@ public enum EstimateGate
 {
     Process,
     Schema,
-    Sanity
+    Sanity,
+
+    /// <summary>
+    /// Gate 4: Jira did not actually store the estimate. The only gate backed by evidence
+    /// rather than by what Claude reported, and the only one raised outside this file.
+    /// </summary>
+    Effect
 }
 
 public sealed record TicketEstimate(

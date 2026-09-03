@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace TmTimeTracker.Jira;
 
-public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSearchSource, IJiraEstimateWriter
+public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSearchSource, IJiraEstimateWriter, IJiraProjectSource
 {
     private const string DefaultApiBase = "https://api.atlassian.com/ex/jira";
     private readonly HttpClient _http;

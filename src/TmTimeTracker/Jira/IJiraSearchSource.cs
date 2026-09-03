@@ -18,3 +18,11 @@ public interface IJiraEstimateWriter
 {
     Task SetOriginalEstimateAsync(string ticketKey, int minutes, CancellationToken ct);
 }
+
+/// <summary>
+/// Seam over the project list, used to auto-match a tracked repo folder to its Jira board.
+/// </summary>
+public interface IJiraProjectSource
+{
+    Task<IReadOnlyList<JiraProject>> ListProjectsAsync(CancellationToken ct);
+}

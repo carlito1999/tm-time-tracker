@@ -61,6 +61,26 @@ public sealed class GitWorktreeManager : IGitWorktreeManager
         return target;
     }
 
+    /// <summary>
+    /// Recent commit subjects, used as the estimation prompt's reference class. Called against
+    /// the prepared worktree, so the history is the default branch's rather than whatever the
+    /// user has checked out locally.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RecentCommitSubjectsAsync(
+        string repoPath, int count, CancellationToken ct)
+    {
+        var result = await TryRunAsync(repoPath, ct,
+            "log", $"--max-count={count}", "--format=%s");
+
+        // History is calibration, not a requirement: a shallow or empty repo still gets an
+        // estimate, just without the reference class.
+        if (!result.Ok) return Array.Empty<string>();
+
+        return result.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+    }
+
     public void Remove(string repoPath)
     {
         try
