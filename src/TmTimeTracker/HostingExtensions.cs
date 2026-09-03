@@ -43,6 +43,8 @@ public static class HostingExtensions
             services.AddSingleton<IGitBranchProbe, GitBranchProbe>();
             services.AddSingleton<IForegroundWindowProbe, Win32ForegroundWindowProbe>();
             services.AddSingleton<IClaudeCodeActivityProbe, FileClaudeCodeActivityProbe>();
+            services.AddSingleton<IClaudeSessionProbe, FileClaudeSessionProbe>();
+            services.AddSingleton<IProcessLiveness, Win32ProcessLiveness>();
             services.AddSingleton<ActiveRepoResolver>();
             services.AddSingleton<RepoActivityMonitor>();
             services.AddSingleton<IRepoActivitySource>(
