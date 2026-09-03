@@ -6,25 +6,24 @@ using TmTimeTracker.Platform;
 
 namespace TmTimeTracker.Services;
 
+/// <summary>
+/// Tracks whether the user is at the desk. This is the human stream's gate only - Claude Code
+/// activity deliberately has no say here, because unattended agent work is credited by
+/// <see cref="RepoActivityMonitor"/>'s Claude stream rather than by pretending someone is typing.
+/// </summary>
 public sealed class IdleMonitor : BackgroundService
 {
-    private static readonly TimeSpan ClaudeActivityWindow = TimeSpan.FromSeconds(60);
-
     private readonly IIdleProbe _probe;
-    private readonly IClaudeCodeActivityProbe _claudeProbe;
-    private readonly ActiveRepoResolver _resolver;
     private readonly IEventBus _bus;
     private readonly IClock _clock;
     private readonly ConfigRepository _config;
     private readonly ILogger<IdleMonitor> _log;
     private readonly TimeSpan _sampleInterval = TimeSpan.FromSeconds(5);
 
-    public IdleMonitor(IIdleProbe probe, IClaudeCodeActivityProbe claudeProbe,
-        ActiveRepoResolver resolver, IEventBus bus, IClock clock,
+    public IdleMonitor(IIdleProbe probe, IEventBus bus, IClock clock,
         ConfigRepository config, ILogger<IdleMonitor> log)
     {
-        _probe = probe; _claudeProbe = claudeProbe; _resolver = resolver;
-        _bus = bus; _clock = clock; _config = config; _log = log;
+        _probe = probe; _bus = bus; _clock = clock; _config = config; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -46,8 +45,7 @@ public sealed class IdleMonitor : BackgroundService
             {
                 var idleSec = _probe.SecondsSinceLastInput();
                 var locked = _probe.IsSessionLocked();
-                var claudeActive = IsClaudeActiveForCurrentRepo();
-                sm.Observe(idleSec, locked, claudeActive);
+                sm.Observe(idleSec, locked);
             }
             catch (Exception ex)
             {
@@ -56,15 +54,5 @@ public sealed class IdleMonitor : BackgroundService
             }
             await Task.Delay(_sampleInterval, stoppingToken).ConfigureAwait(false);
         }
-    }
-
-    private bool IsClaudeActiveForCurrentRepo()
-    {
-        var activeRepo = _resolver.LastResolution?.RepoPath;
-        if (activeRepo is null) return false;
-        var snap = _claudeProbe.Snapshot();
-        var slug = ClaudeProjectSlug.FromPath(activeRepo);
-        return snap.TryGetValue(slug, out var mtime)
-               && (_clock.UtcNow - mtime) <= ClaudeActivityWindow;
     }
 }

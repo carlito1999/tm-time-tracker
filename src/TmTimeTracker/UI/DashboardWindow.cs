@@ -22,7 +22,7 @@ public sealed class DashboardWindow : Form
     private readonly ConfigRepository _config;
     private readonly IClock _clock;
     private readonly IClaudeCodeActivityProbe _claudeProbe;
-    private readonly ActiveRepoResolver _resolver;
+    private readonly TrackedRepoRepository _repos;
     private readonly JiraApiClient _api;
     private readonly ILogger<DashboardWindow> _log;
 
@@ -56,7 +56,7 @@ public sealed class DashboardWindow : Form
         ConfigRepository config,
         IClock clock,
         IClaudeCodeActivityProbe claudeProbe,
-        ActiveRepoResolver resolver,
+        TrackedRepoRepository repos,
         JiraApiClient api,
         ILogger<DashboardWindow> log)
     {
@@ -67,7 +67,7 @@ public sealed class DashboardWindow : Form
         _config = config;
         _clock = clock;
         _claudeProbe = claudeProbe;
-        _resolver = resolver;
+        _repos = repos;
         _api = api;
         _log = log;
 
@@ -374,7 +374,7 @@ public sealed class DashboardWindow : Form
     private static string Describe(DomainEvent e) => e switch
     {
         ActivityChanged a => a.State.ToString(),
-        BranchChanged b   => $"{b.Branch ?? "(detached)"} → {b.TicketKey ?? "(no ticket)"}",
+        BranchChanged b   => $"{Path.GetFileName(b.RepoPath) ?? "?"}: {b.Branch ?? "(detached)"} → {b.TicketKey ?? "(no ticket)"}",
         JiraStatusTransition t => $"{t.TicketKey}: {t.FromStatus} → {t.ToStatus}",
         WorklogSubmitted w => $"{w.TicketKey}: posted {w.Minutes}m (id={w.WorklogId})",
         RememberEntriesObserved r => $"{r.Entries.Count} entries observed for {r.EntryDate}",
@@ -417,25 +417,28 @@ public sealed class DashboardWindow : Form
         }
     }
 
+    /// <summary>
+    /// Counts every tracked repo Claude is working in, not just the focused one - sessions run in
+    /// parallel now, and a badge that only watched the foreground repo read "idle" while an agent
+    /// was busy next door. The 60s window is a display heuristic for a UI that repaints on its own
+    /// timer; it is unrelated to how the aggregator counts minutes.
+    /// </summary>
     private void UpdateClaudeBadge()
     {
-        var activeRepo = _resolver.LastResolution?.RepoPath;
-        if (activeRepo is null)
-        {
-            _claudePill.Set("Claude idle", PillTone.Idle);
-            return;
-        }
         var snap = _claudeProbe.Snapshot();
-        var slug = ClaudeProjectSlug.FromPath(activeRepo);
-        if (snap.TryGetValue(slug, out var mtime)
-            && (DateTime.UtcNow - mtime) <= TimeSpan.FromSeconds(60))
-        {
-            _claudePill.Set("Claude active", PillTone.Claude);
-        }
-        else
-        {
-            _claudePill.Set("Claude idle", PillTone.Idle);
-        }
+        var cutoff = DateTime.UtcNow - TimeSpan.FromSeconds(60);
+        var active = _repos.GetAll()
+            .Count(r => snap.TryGetValue(ClaudeProjectSlug.FromPath(r.Path), out var mtime)
+                        && mtime > cutoff);
+
+        _claudePill.Set(
+            active switch
+            {
+                0 => "Claude idle",
+                1 => "Claude active",
+                _ => $"Claude active ×{active}"
+            },
+            active == 0 ? PillTone.Idle : PillTone.Claude);
     }
 
     private string? CurrentTicket() =>

@@ -44,6 +44,9 @@ public static class HostingExtensions
             services.AddSingleton<IForegroundWindowProbe, Win32ForegroundWindowProbe>();
             services.AddSingleton<IClaudeCodeActivityProbe, FileClaudeCodeActivityProbe>();
             services.AddSingleton<ActiveRepoResolver>();
+            services.AddSingleton<RepoActivityMonitor>();
+            services.AddSingleton<IRepoActivitySource>(
+                sp => sp.GetRequiredService<RepoActivityMonitor>());
         });
         return builder;
     }
