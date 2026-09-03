@@ -53,4 +53,21 @@ public static class ClaudeCommandLine
 
         return args;
     }
+
+    /// <summary>
+    /// A minimal real session used by the Settings "Test" button. It has to actually reach the
+    /// model: the failure this exists to catch is an expired login, and only a real call sees
+    /// that. Kept on the cheapest model with a small budget, and under the same safety flags as
+    /// a real run.
+    /// </summary>
+    public static IReadOnlyList<string> BuildCheck() => new[]
+    {
+        "-p", "Reply with the single word OK.",
+        "--output-format", "json",
+        "--restricted",
+        "--permission-mode", "plan",
+        "--strict-mcp-config",
+        "--max-budget-usd", "0.25",
+        "--model", "haiku"
+    };
 }

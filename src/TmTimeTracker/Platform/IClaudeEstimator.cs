@@ -18,6 +18,12 @@ public sealed class ClaudeUnavailableException : Exception
 public interface IClaudeEstimator
 {
     Task<ClaudeRun> RunAsync(string workingDirectory, string prompt, CancellationToken ct);
+
+    /// <summary>
+    /// Minimal real session confirming the CLI is installed and its credential still works.
+    /// Used by the Settings "Test" button.
+    /// </summary>
+    Task<ClaudeRun> CheckAsync(CancellationToken ct);
 }
 
 /// <param name="ExecutablePath">

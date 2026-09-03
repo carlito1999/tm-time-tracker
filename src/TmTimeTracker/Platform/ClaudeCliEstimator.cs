@@ -31,7 +31,15 @@ public sealed class ClaudeCliEstimator : IClaudeEstimator
         _log = log;
     }
 
-    public async Task<ClaudeRun> RunAsync(string workingDirectory, string prompt, CancellationToken ct)
+    public Task<ClaudeRun> CheckAsync(CancellationToken ct) =>
+        LaunchAsync(Path.GetTempPath(), ClaudeCommandLine.BuildCheck(), ct);
+
+    public Task<ClaudeRun> RunAsync(string workingDirectory, string prompt, CancellationToken ct) =>
+        LaunchAsync(workingDirectory,
+            ClaudeCommandLine.Build(prompt, _options.Model, _options.MaxBudgetUsd), ct);
+
+    private async Task<ClaudeRun> LaunchAsync(string workingDirectory,
+        IReadOnlyList<string> arguments, CancellationToken ct)
     {
         var psi = new ProcessStartInfo(_options.ExecutablePath ?? "claude")
         {
@@ -42,7 +50,7 @@ public sealed class ClaudeCliEstimator : IClaudeEstimator
             CreateNoWindow = true
         };
 
-        foreach (var arg in ClaudeCommandLine.Build(prompt, _options.Model, _options.MaxBudgetUsd))
+        foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
 
         ApplyCredential(psi);

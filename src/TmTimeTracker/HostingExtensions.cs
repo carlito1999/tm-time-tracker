@@ -108,6 +108,9 @@ public static class HostingExtensions
                 return new JiraApiClient(http, tokens, log);
             });
             services.AddSingleton<IJiraIssueSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraSearchSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraEstimateWriter>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraProjectSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
             services.AddSingleton<IJiraSiteResolver>(sp => new JiraSiteResolver(
                 sp.GetRequiredService<JiraSiteRepository>(),
@@ -149,6 +152,27 @@ public static class HostingExtensions
             services.AddSingleton<ISlackPoster>(sp => sp.GetRequiredService<SlackApiClient>());
 
             services.AddHostedService<PrAnnouncementWorker>();
+        });
+        return builder;
+    }
+
+    /// <summary>
+    /// Claude-powered estimation of To-Do tickets. Registered separately from the poll services
+    /// because it is the only feature that spawns a child process and spends money, so it can be
+    /// left out of the CLI modes.
+    /// </summary>
+    public static IHostBuilder AddClaudeServices(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<ClaudeAuthRepository>();
+            services.AddSingleton<RepoProjectRepository>();
+            services.AddSingleton<TicketEstimateRepository>();
+            services.AddSingleton(new ClaudeEstimatorOptions());
+            services.AddSingleton<IClaudeEstimator, ClaudeCliEstimator>();
+            services.AddSingleton<IGitWorktreeManager>(sp =>
+                new GitWorktreeManager(sp.GetRequiredService<ILogger<GitWorktreeManager>>()));
+            services.AddHostedService<TicketEstimationWorker>();
         });
         return builder;
     }

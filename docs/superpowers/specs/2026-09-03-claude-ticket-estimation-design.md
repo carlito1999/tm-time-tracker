@@ -73,6 +73,7 @@ claude -p "<prompt>"
        --json-schema '<schema>'
        --restricted
        --permission-mode plan
+       --strict-mcp-config
        --max-budget-usd <cap>
        --model <configured>
 ```
@@ -82,8 +83,14 @@ claude -p "<prompt>"
 - `--max-budget-usd` bounds cost per ticket.
 - `CLAUDE_CODE_OAUTH_TOKEN` is set on the child **only** when a token is stored; otherwise the
   child inherits the machine's Claude Code login.
-- Hard wall-clock timeout (default 10 min). Kill uses `Process.Kill(entireProcessTree: true)` —
-  `claude` on Windows wraps `node.exe`, and killing only the wrapper orphans the child.
+- Hard wall-clock timeout (default 10 min). Kill uses `Process.Kill(entireProcessTree: true)`.
+  On this machine `claude` is a native `claude.exe` rather than a node wrapper, so PATH lookup
+  works directly - but it still spawns children, and killing only the parent would leave them
+  holding the worktree open and break the next sweep's cleanup.
+
+The CLI emits a JSON **array** of events; the payload is on the final element whose type is
+`result`, which carries an already-parsed `structured_output` object beside the `result`
+string. Confirmed against a live run.
 
 Output schema:
 
@@ -133,10 +140,15 @@ Via the existing `IUserNotifier`. Conditions: no `claude` executable, auth failu
 failure, worktree failure, timeout, unparseable output, sanity failure, Jira write rejected,
 project unmapped.
 
-**Each distinct failure notifies once, not every 5 minutes.** State lives in the
-`ticket_estimate` / repo-fault rows (the `warned_at` pattern from
-`PrAnnouncementWorker.cs:246`), so a restart cannot re-notify about the same thing. A failure
-re-arms when its condition changes or clears.
+**Each distinct failure notifies once, not every 5 minutes.**
+
+Per-ticket failures dedupe on `ticket_estimate.warned_at` (the pattern from
+`PrAnnouncementWorker.cs:246`), so a restart cannot re-notify about the same ticket.
+
+Repo-level faults - unmappable project, failed fetch, missing worktree - have no ticket row to
+hold a flag, so they dedupe in memory for the lifetime of the process. A restart therefore
+re-notifies once about a still-broken repo. That is the right side to err on: these are
+configuration problems the user has to fix, and silence after a restart would hide them.
 
 `urgent: true` for auth and missing-executable failures — nothing works until the user acts.
 Normal priority for per-ticket failures. Messages name the gate and the underlying error,

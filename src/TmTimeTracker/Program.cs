@@ -113,6 +113,7 @@ static async Task RunDaemon()
             .AddPollGate()
             .AddPollServices()
             .AddSlackServices()
+            .AddClaudeServices()
             .AddTrayUI()
             .Build();
 
