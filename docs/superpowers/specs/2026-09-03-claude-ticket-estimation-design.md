@@ -21,7 +21,9 @@ The estimate must be an honest best guess: neither padded nor optimistic.
 | Repo to Jira project | Match repo folder name against project **display name**, normalised | Boards are 1:1 with repo names (`training-manager` to "Training Manager"). Key matching is a secondary pass. |
 | Claude auth | Ambient CLI login; optional token override | Works out of the box. Token field on the OAuth tab covers the headless-daemon case where the interactive login has expired. |
 | Where Claude runs | Detached `git worktree` under `%LOCALAPPDATA%\TmTimeTracker\estimates\<repo>` | Prevents the estimator from corrupting the app's own time tracking (see Isolation). Also guarantees the user's working copy is untouched. |
-| Which revision | `origin/<default branch>` after `git fetch` | Estimate against latest main, not local branch state. |
+| Which revision | Newest branch in the repo's trunk *family*, after `git fetch` | origin/HEAD proved unreliable - see Trunk selection. |
+| Model | Latest Sonnet, by bare alias | Sizing a ticket is judgement over code already read, not hard reasoning. Runs unattended on the user's own quota. |
+| Subagents | Disallowed | Fan-out was the dominant cost: one spawned Task spent 28k tokens over 24 tool calls before the budget stopped the run. |
 | Doneness | Derived from artifacts in code; Claude is never asked | A self-report cannot be verified. |
 | Retry | 2 attempts max, targeted at the failing layer | User's rule. |
 | Failure surfacing | Windows toast via existing `IUserNotifier` | User's requirement. Deduped — see Notifications. |
@@ -51,7 +53,9 @@ have registered as user activity and inflated worklogs.
 For each tracked repo, every 5 minutes:
 
 1. Resolve the repo's Jira project (stored mapping, else auto-match, else skip + notify once).
-2. JQL: `project = "<KEY>" AND statusCategory = "To Do" ORDER BY created ASC`.
+2. JQL: `project = "<KEY>" AND status = "To Do" ORDER BY created ASC`. Deliberately `status`,
+   not `statusCategory`: the category "To Do" also covers Backlog, Open and Selected for
+   Development, and each extra ticket costs a real Claude session.
 3. For each returned issue with no terminal `ticket_estimate` row:
    1. Read the issue; if `timetracking.originalEstimateSeconds` is already set, mark
       `skipped_existing` and move on.
@@ -113,6 +117,28 @@ Output schema:
 The prompt supplies the ticket key, summary and description, and asks for the time **Claude
 Code itself** would need in this codebase to implement, test, and pass code review —
 explicitly instructing against padding or optimism.
+
+## Trunk selection
+
+`origin/HEAD` is not a reliable pointer to the branch carrying current work. In one tracked repo
+it points at `mainTraining`, a stub holding a single `.gitignore` from an October "Initial
+commit", while live work lands on rolling dated branches. Following it produced a confident,
+plausible estimate of an empty directory - and no verification gate could have caught it, since
+nothing downstream distinguishes an empty repository from an easy ticket.
+
+Two mechanisms replace it:
+
+**Family detection.** Trunk-shaped branches are grouped by their leading word and the family with
+the most members wins - a repo that cuts dated snapshots repeats its prefix many times. Then the
+newest branch in that family by commit date is used. Splitting at the first non-letter keeps
+`mainTraining` out of the `main` family. Measured across the tracked repos: `master`(1);
+`main`(57) beside `master`(1); `dev`(17) beside `main`(1); `dev`(15) beside `mainTraining`(1);
+`main`(1) - each resolving to a real codebase with no configuration.
+
+**An emptiness guard.** A prepared worktree with fewer than five tracked files is refused with a
+notification naming the branch, rather than estimated.
+
+`repo_branch` holds an optional per-repo override for a repo neither rule fits.
 
 ## Verification chain
 
@@ -231,5 +257,7 @@ from `HKCU\Run` where a user-local bin directory may not be on PATH.
 
 - Re-estimating when a ticket's description changes (store Jira `updated` if wanted later).
 - A dashboard panel for estimates.
+- A project picker on the Repositories tab. Auto-matching covers the 1:1 naming in use, and an
+  unmatched repo raises a notification.
 - Estimating anything outside `statusCategory = "To Do"`.
 - Posting the rationale to Jira as a comment.
