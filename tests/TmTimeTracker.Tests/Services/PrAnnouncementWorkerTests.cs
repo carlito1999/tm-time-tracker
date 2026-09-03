@@ -35,7 +35,10 @@ public class PrAnnouncementWorkerTests
     private static Harness Build(
         DevInfoSnapshot? snapshot = null,
         string template = "{TICKET} {PR_URL}",
-        bool channelConfigured = true)
+        bool channelConfigured = true,
+        // Jira is the authority on whether a ticket is still in review, so this is what decides
+        // whether an announcement is kept or forgotten.
+        string issueStatus = "Review")
     {
         var factory = SharedSqlite.NewInMemory();
         new DatabaseInitializer(factory).EnsureCreated();
@@ -58,7 +61,7 @@ public class PrAnnouncementWorkerTests
         var issues = new Mock<IJiraIssueSource>();
         issues.Setup(i => i.GetIssueAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new Issue("SN-298",
-                  new IssueFields(new IssueStatus("Review", new StatusCategory("indeterminate", "In Progress")),
+                  new IssueFields(new IssueStatus(issueStatus, new StatusCategory("indeterminate", "In Progress")),
                       "257 Less important but convenient"), "28848"));
 
         var slack = new Mock<ISlackPoster>();
@@ -226,7 +229,7 @@ public class PrAnnouncementWorkerTests
     [Fact]
     public async Task Forgets_a_ticket_that_has_left_review_so_it_can_announce_again_later()
     {
-        var h = Build(WithPr());
+        var h = Build(WithPr(), issueStatus: "In Progress");
         QueueTicket(h);
         PutInReview(h, status: "In Progress");
 
@@ -245,5 +248,24 @@ public class PrAnnouncementWorkerTests
 
         outcome.Should().Be(AnnouncementOutcome.NotApplicable);
         h.Announcements.Find("SN-298").Should().BeNull();
+    }
+
+    // Moving a ticket to Review is exactly what makes the app post its worklog, and posting closes
+    // the time-tracking cycle. If the announcement's lifetime is tied to an OPEN cycle, every
+    // pending announcement is destroyed within one sweep of being queued - while the ticket is
+    // still sitting in Review, still owing a message.
+    [Fact]
+    public async Task Keeps_a_pending_announcement_after_its_worklog_is_submitted()
+    {
+        var h = Build();                       // no pull request yet, so it stays pending
+        QueueTicket(h);
+        var cycle = h.Tickets.OpenOrCreateCycle("SN-298", h.Clock.UtcNow);
+        h.Tickets.UpdateStatusSnapshot(cycle.Id, "Review", h.Clock.UtcNow);
+        h.Tickets.MarkSubmitted(cycle.Id, "22259", 42, h.Clock.UtcNow);
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Announcements.Find("SN-298").Should()
+            .NotBeNull("the ticket is still in Review; only its worklog was submitted");
     }
 }

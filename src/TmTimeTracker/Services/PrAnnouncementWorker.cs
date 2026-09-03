@@ -111,7 +111,7 @@ public sealed class PrAnnouncementWorker : BackgroundService
         try
         {
             await DiscoverAsync(ct).ConfigureAwait(false);
-            Forget();
+            await ForgetAsync(ct).ConfigureAwait(false);
 
             foreach (var pending in _announcements.GetPending())
             {
@@ -169,20 +169,41 @@ public sealed class PrAnnouncementWorker : BackgroundService
     /// <summary>
     /// Drops rows for tickets that are no longer waiting in review, so the same ticket announces
     /// again if it later comes back.
+    ///
+    /// Asks Jira rather than inferring it from the time-tracking cycles. An open cycle is not
+    /// evidence of anything here: moving a ticket to review is what makes the app post its
+    /// worklog, and posting closes the cycle. Reading "no open cycle" as "left review" therefore
+    /// destroyed every pending announcement within one sweep of queueing it, unless the user
+    /// happened to keep working on the branch afterwards.
+    ///
+    /// Only a status that Jira confirms is outside review removes a row. A failed lookup keeps it:
+    /// forgetting on missing evidence is the whole bug.
     /// </summary>
-    private void Forget()
+    private async Task ForgetAsync(CancellationToken ct)
     {
         var reviewStatus = _config.Get().TransitionToStatusName;
-        var inReview = _tickets.GetAllOpen()
-            .Where(c => string.Equals(c.LastSeenStatus, reviewStatus, StringComparison.Ordinal))
-            .Select(c => c.TicketKey)
-            .ToHashSet(StringComparer.Ordinal);
 
         foreach (var key in _announcements.GetAllTicketKeys())
         {
-            if (inReview.Contains(key)) continue;
+            ct.ThrowIfCancellationRequested();
+
+            string? status;
+            try
+            {
+                var issue = await _issues.GetIssueAsync(key, ct).ConfigureAwait(false);
+                status = issue.Fields.Status.Name;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Could not read {Ticket}; keeping its announcement state", key);
+                continue;
+            }
+
+            if (string.Equals(status, reviewStatus, StringComparison.Ordinal)) continue;
+
             _announcements.Remove(key);
-            _log.LogDebug("{Ticket} left {Status}; forgetting its announcement state", key, reviewStatus);
+            _log.LogDebug("{Ticket} is now {Status}; forgetting its announcement state", key, status);
         }
     }
 
