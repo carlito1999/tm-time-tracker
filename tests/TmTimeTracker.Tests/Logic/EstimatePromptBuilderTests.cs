@@ -11,9 +11,10 @@ public class EstimatePromptBuilderTests
         string? summary = "Add a retry to the poll loop",
         string? description = "The poll should retry twice before giving up.",
         string repoName = "training-manager",
-        IReadOnlyList<string>? commits = null) =>
+        IReadOnlyList<string>? commits = null,
+        IReadOnlyList<string>? images = null) =>
         EstimatePromptBuilder.Build(key, summary, description, repoName,
-            commits ?? Array.Empty<string>());
+            commits ?? Array.Empty<string>(), images);
 
     [Fact]
     public void States_the_ticket_key_and_summary()
@@ -116,6 +117,29 @@ public class EstimatePromptBuilderTests
 
         prompt.Should().Contain("TM-42");
         prompt.Should().Contain("no description");
+    }
+
+    /// <summary>
+    /// A ticket whose whole description is a screenshot - the common shape here - would
+    /// otherwise be estimated from the summary alone.
+    /// </summary>
+    [Fact]
+    public void Points_at_the_ticket_attachments()
+    {
+        var prompt = Build(images: new[]
+        {
+            ".ticket-attachments/TM-50/image-20260901-115038.png",
+            ".ticket-attachments/TM-50/figures.xlsx.txt"
+        });
+
+        prompt.Should().Contain("image-20260901-115038.png").And.Contain("figures.xlsx.txt");
+        prompt.ToUpperInvariant().Should().Contain("READ THEM");
+    }
+
+    [Fact]
+    public void Says_nothing_about_attachments_when_there_are_none()
+    {
+        Build(images: Array.Empty<string>()).Should().NotContain("files attached");
     }
 
     [Fact]

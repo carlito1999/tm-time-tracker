@@ -50,6 +50,7 @@ public sealed class TicketEstimationWorker : BackgroundService
     private readonly IJiraProjectSource _projects;
     private readonly IClaudeEstimator _claude;
     private readonly IGitWorktreeManager _worktrees;
+    private readonly TicketAttachmentFetcher _attachments;
     private readonly IUserNotifier _notifier;
     private readonly IClock _clock;
     private readonly ILogger<TicketEstimationWorker> _log;
@@ -64,13 +65,15 @@ public sealed class TicketEstimationWorker : BackgroundService
         RepoBranchRepository branches,
         TicketEstimateRepository estimates, IJiraSearchSource search,
         IJiraIssueSource issues, IJiraEstimateWriter writer, IJiraProjectSource projects,
-        IClaudeEstimator claude, IGitWorktreeManager worktrees, IUserNotifier notifier,
+        IClaudeEstimator claude, IGitWorktreeManager worktrees,
+        TicketAttachmentFetcher attachments, IUserNotifier notifier,
         IClock clock, ILogger<TicketEstimationWorker> log)
     {
         _repos = repos; _mappings = mappings; _branches = branches;
         _estimates = estimates; _search = search;
         _issues = issues; _writer = writer; _projects = projects; _claude = claude;
-        _worktrees = worktrees; _notifier = notifier; _clock = clock; _log = log;
+        _worktrees = worktrees; _attachments = attachments;
+        _notifier = notifier; _clock = clock; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -178,9 +181,14 @@ public sealed class TicketEstimationWorker : BackgroundService
     private async Task EstimateAsync(Issue issue, string repoPath, string worktree,
         IReadOnlyList<string> commits, CancellationToken ct)
     {
+        // A ticket whose description is only a screenshot flattens to an empty string, so the
+        // attachments are frequently the only statement of what the work actually is.
+        var attachmentFiles = await _attachments
+            .FetchAsync(worktree, issue.Key, issue.Fields.Attachments, ct).ConfigureAwait(false);
+
         var prompt = EstimatePromptBuilder.Build(
             issue.Key, issue.Fields.Summary, AdfText.Flatten(issue.Fields.Description),
-            Name(repoPath), commits);
+            Name(repoPath), commits, attachmentFiles);
 
         EstimateParse? parse = null;
         string? rawOutput = null;

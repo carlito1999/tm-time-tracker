@@ -26,3 +26,12 @@ public interface IJiraProjectSource
 {
     Task<IReadOnlyList<JiraProject>> ListProjectsAsync(CancellationToken ct);
 }
+
+/// <summary>
+/// Seam over attachment downloads. Ticket detail frequently lives only in a screenshot, so the
+/// estimator fetches images and lets Claude read them alongside the code.
+/// </summary>
+public interface IJiraAttachmentSource
+{
+    Task<byte[]> DownloadAttachmentAsync(string contentUrl, CancellationToken ct);
+}

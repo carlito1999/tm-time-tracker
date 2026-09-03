@@ -111,6 +111,7 @@ public static class HostingExtensions
             services.AddSingleton<IJiraSearchSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IJiraEstimateWriter>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IJiraProjectSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraAttachmentSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
             services.AddSingleton<IJiraSiteResolver>(sp => new JiraSiteResolver(
                 sp.GetRequiredService<JiraSiteRepository>(),
@@ -173,6 +174,7 @@ public static class HostingExtensions
             services.AddSingleton<IClaudeEstimator, ClaudeCliEstimator>();
             services.AddSingleton<IGitWorktreeManager>(sp =>
                 new GitWorktreeManager(sp.GetRequiredService<ILogger<GitWorktreeManager>>()));
+            services.AddSingleton<TicketAttachmentFetcher>();
             services.AddHostedService<TicketEstimationWorker>();
         });
         return builder;

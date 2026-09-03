@@ -118,12 +118,19 @@ public class TicketEstimationWorkerTests
 
         var notifier = new Mock<IUserNotifier>();
 
+        var attachmentSource = new Mock<IJiraAttachmentSource>();
+        attachmentSource.Setup(a => a.DownloadAttachmentAsync(It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                        .ReturnsAsync(Array.Empty<byte>());
+        var fetcher = new TicketAttachmentFetcher(attachmentSource.Object,
+            NullLogger<TicketAttachmentFetcher>.Instance);
+
         return new Harness
         {
             Worker = new TicketEstimationWorker(repos, mappings,
                 new RepoBranchRepository(factory), estimates, search.Object,
                 reader.Object, writer.Object, projectSource.Object, claude.Object,
-                worktrees.Object, notifier.Object, new FixedClock(),
+                worktrees.Object, fetcher, notifier.Object, new FixedClock(),
                 NullLogger<TicketEstimationWorker>.Instance),
             Estimates = estimates,
             Mappings = mappings,

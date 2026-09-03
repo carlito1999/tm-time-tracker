@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace TmTimeTracker.Jira;
 
-public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSearchSource, IJiraEstimateWriter, IJiraProjectSource
+public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSearchSource, IJiraEstimateWriter, IJiraProjectSource, IJiraAttachmentSource
 {
     private const string DefaultApiBase = "https://api.atlassian.com/ex/jira";
     private readonly HttpClient _http;
@@ -24,7 +24,7 @@ public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSea
     {
         var (resp, _) = await SendAsync(HttpMethod.Get,
             cloudId => $"{_apiBase}/{cloudId}/rest/api/3/issue/{key}"
-                     + "?fields=status,summary,timetracking,description",
+                     + "?fields=status,summary,timetracking,description,attachment",
             contentFactory: null, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<Issue>(cancellationToken: ct).ConfigureAwait(false))!;
@@ -83,7 +83,7 @@ public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSea
         {
             jql,
             maxResults = 50,
-            fields = new[] { "summary", "status", "timetracking", "description" }
+            fields = new[] { "summary", "status", "timetracking", "description", "attachment" }
         };
 
         var (resp, _) = await SendAsync(HttpMethod.Post,
@@ -129,6 +129,25 @@ public sealed class JiraApiClient : IJiraIssueSource, IDevStatusSource, IJiraSea
             () => JsonContent.Create(body), ct).ConfigureAwait(false);
 
         using (resp) resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Downloads an attachment.
+    ///
+    /// The content URL Jira hands back is already absolute and already carries the cloud id, so
+    /// this bypasses the usual URL builder and only supplies the bearer token. It follows the
+    /// redirect Jira issues to its media host.
+    /// </summary>
+    public async Task<byte[]> DownloadAttachmentAsync(string contentUrl, CancellationToken ct)
+    {
+        var (resp, _) = await SendAsync(HttpMethod.Get, _ => contentUrl,
+            contentFactory: null, ct).ConfigureAwait(false);
+
+        using (resp)
+        {
+            resp.EnsureSuccessStatusCode();
+            return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

@@ -29,7 +29,25 @@ public sealed record IssueFields(
     [property: JsonPropertyName("status")] IssueStatus Status,
     [property: JsonPropertyName("summary")] string? Summary = null,
     [property: JsonPropertyName("timetracking")] JiraTimeTracking? TimeTracking = null,
-    [property: JsonPropertyName("description")] System.Text.Json.JsonElement? Description = null);
+    [property: JsonPropertyName("description")] System.Text.Json.JsonElement? Description = null,
+    [property: JsonPropertyName("attachment")] JiraAttachment[]? Attachments = null);
+
+/// <summary>
+/// A file on the issue. Tickets here are often nothing but a screenshot - the description ADF
+/// carries a media node with no text at all - so the attachments are the only place the actual
+/// content lives.
+/// </summary>
+public sealed record JiraAttachment(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("filename")] string Filename,
+    [property: JsonPropertyName("mimeType")] string? MimeType,
+    [property: JsonPropertyName("size")] long Size,
+    [property: JsonPropertyName("content")] string? Content)
+{
+    public bool IsImage =>
+        MimeType is not null &&
+        MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+}
 
 // originalEstimateSeconds is the field gate 4 compares against: Jira accepts a write expressed
 // in its own duration syntax but reports the stored value back in seconds.

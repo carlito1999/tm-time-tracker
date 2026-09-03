@@ -28,7 +28,8 @@ public static class EstimatePromptBuilder
     private const int MaxCommits = 25;
 
     public static string Build(string ticketKey, string? summary, string? description,
-        string repoName, IReadOnlyList<string> recentCommits)
+        string repoName, IReadOnlyList<string> recentCommits,
+        IReadOnlyList<string>? attachmentFiles = null)
     {
         var sb = new StringBuilder();
 
@@ -113,6 +114,22 @@ public static class EstimatePromptBuilder
 
         var flatSummary = Flatten(summary);
         if (flatSummary.Length == 0) flatSummary = "(none given)";
+
+        if (attachmentFiles is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine(
+                "The ticket has files attached, saved into this checkout at the paths below. "
+                + "READ THEM before estimating - a ticket here is often nothing but an "
+                + "attachment, so the description text can be empty while a screenshot, PDF or "
+                + "spreadsheet carries the error message, the stack trace, the data or the "
+                + "design. A spreadsheet arrives as an extracted .txt because this session "
+                + "cannot open a workbook directly.");
+            sb.AppendLine();
+            foreach (var file in attachmentFiles)
+                sb.AppendLine($"  - {file}");
+            sb.AppendLine();
+        }
 
         sb.AppendLine($"Key: {ticketKey}");
         sb.AppendLine($"Summary: {flatSummary}");
