@@ -37,6 +37,10 @@ if (args.Length == 3 && args[0] == "--set-jira-token")
     { await RunCli(b => b, h => SetJiraToken(h, args[1], args[2])); return; }
 if (args.Length == 3 && args[0] == "--set-bitbucket-token")
     { await RunCli(b => b, h => SetBitbucketToken(h, args[1], args[2])); return; }
+// Two arguments, not three: GitLab authenticates with the token alone, and the username is read
+// back from the API rather than typed.
+if (args.Length == 2 && args[0] == "--set-gitlab-token")
+    { await RunCli(b => b, h => SetGitLabToken(h, args[1])); return; }
 // The overdue warning cannot fire until the read:dev-info:jira scope is granted, so this is the
 // only way to see a real toast come out of the published exe.
 if (args.Length == 1 && args[0] == "--test-toast")
@@ -231,6 +235,37 @@ static async Task SetBitbucketToken(IHost host, string email, string token)
     host.Services.GetRequiredService<BitbucketApiTokenRepository>().Save(email, token);
     Console.WriteLine($"Stored Bitbucket API token for {email} (DPAPI-encrypted).");
     await Task.CompletedTask;
+}
+
+// Probes before storing, because the failure this exists to catch is a token with the wrong
+// scope: a git-access credential reaches GitLab and is refused only at /api/v4, so storing an
+// unchecked token would look like success and fail silently on the first ticket.
+static async Task SetGitLabToken(IHost host, string token)
+{
+    using var http = host.Services.GetRequiredService<IHttpClientFactory>().CreateClient();
+    using var request = new HttpRequestMessage(HttpMethod.Get, "https://gitlab.com/api/v4/user");
+    request.Headers.Add("PRIVATE-TOKEN", token);
+
+    using var response = await http.SendAsync(request);
+    var body = await response.Content.ReadAsStringAsync();
+
+    if (!response.IsSuccessStatusCode)
+    {
+        Console.Error.WriteLine($"GitLab refused the token: {(int)response.StatusCode} {body}");
+        Console.Error.WriteLine("It needs a Personal Access Token carrying read_api. Create one at");
+        Console.Error.WriteLine("  https://gitlab.com/-/user_settings/personal_access_tokens");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    using var doc = System.Text.Json.JsonDocument.Parse(body);
+    var username = doc.RootElement.TryGetProperty("username", out var u)
+        ? u.GetString()
+        : null;
+    if (string.IsNullOrWhiteSpace(username)) username = "gitlab";
+
+    host.Services.GetRequiredService<GitLabApiTokenRepository>().Save(username, token);
+    Console.WriteLine($"Stored GitLab API token for {username} (DPAPI-encrypted).");
 }
 
 // Exercises the same source the worker uses - Bitbucket first, Jira's dev-status only as the

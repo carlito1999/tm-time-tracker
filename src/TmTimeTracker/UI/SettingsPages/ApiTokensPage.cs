@@ -9,22 +9,30 @@ using TmTimeTracker.UI.Theming;
 namespace TmTimeTracker.UI.SettingsPages;
 
 /// <summary>
-/// The two Atlassian API tokens, side by side.
+/// The three API tokens this app needs, side by side.
 ///
-/// They come from the same page and look identical, but are not interchangeable - the Jira one is
-/// scopeless, and Bitbucket rejects it outright. Showing them together, each with its own
-/// walkthrough naming the exact button and scope, is the point of this page: the difference is
-/// invisible once a token is pasted, and diagnosing it afterwards means reading a 401 body.
+/// The two Atlassian ones come from the same page and look identical, but are not
+/// interchangeable - the Jira one is scopeless, and Bitbucket rejects it outright. Showing them
+/// together, each with its own walkthrough naming the exact button and scope, is the point of
+/// this page: the difference is invisible once a token is pasted, and diagnosing it afterwards
+/// means reading a 401 body.
+///
+/// GitLab is a third token again, and unrelated: a Personal Access Token carrying read_api, used
+/// to read the issue a ticket links to. It needs no email, because GitLab authenticates with the
+/// token alone.
 /// </summary>
 public sealed class ApiTokensPage : UserControl
 {
     private const string TokenPageUrl = "https://id.atlassian.com/manage-profile/security/api-tokens";
+    private const string GitLabTokenPageUrl =
+        "https://gitlab.com/-/user_settings/personal_access_tokens";
 
     private readonly IServiceProvider _sp;
     private readonly ILogger _log;
     private readonly TextBox _emailBox;
     private readonly TokenSection _jira;
     private readonly TokenSection _bitbucket;
+    private readonly TokenSection _gitlab;
 
     public ApiTokensPage(IServiceProvider sp, ILogger log)
     {
@@ -77,7 +85,30 @@ public sealed class ApiTokensPage : UserControl
             },
             onCreate: OpenTokenPage);
 
+        _gitlab = new TokenSection(
+            title: "GitLab token \u2014 reads the linked issue",
+            hint: "Tickets here are often nothing but a link to a GitLab issue. The app "
+                + "reads that issue and puts its text into the estimation prompt; without "
+                + "this the estimate is made without ever seeing what the ticket is about.",
+            walkthrough: new[]
+            {
+                "1.  Press \"Add new token\" and keep the CLASSIC token form.",
+                "2.  Name it, for example Time tracker, and set an expiry.",
+                "3.  Tick exactly one scope: read_api",
+                "4.  Copy the token and paste it above, then press Save and test.",
+                "",
+                "If you land on a \"Resource and permission selector\" with Group "
+                + "and project, User and Global tabs, that is the newer fine-grained form and "
+                + "it has no read_api checkbox. Go back and choose the classic token instead.",
+                "",
+                "read_api, not api: this only ever reads. The GitLab sign-in your git client "
+                + "already uses cannot be reused - it authenticates git transport only and "
+                + "answers 403 insufficient_scope to every API call."
+            },
+            onCreate: OpenGitLabTokenPage);
+
         _jira.Save.Click += async (_, _) => await SaveJiraAsync();
+        _gitlab.Save.Click += async (_, _) => await SaveGitLabAsync();
         _bitbucket.Save.Click += async (_, _) => await SaveBitbucketAsync();
 
         var emailRow = new FlowLayoutPanel
@@ -91,6 +122,11 @@ public sealed class ApiTokensPage : UserControl
         emailRow.Controls.Add(_emailBox);
 
         // Docked children stack in reverse order of addition, so add bottom-up.
+        foreach (var c in _gitlab.Controls) Controls.Add(c);
+        Controls.Add(MakeHint(
+            "A separate GitLab Personal Access Token, unrelated to the two above and created "
+            + "somewhere else entirely."));
+        Controls.Add(MakeHeading("GitLab API token"));
         foreach (var c in _bitbucket.Controls) Controls.Add(c);
         foreach (var c in _jira.Controls) Controls.Add(c);
         Controls.Add(emailRow);
@@ -119,6 +155,10 @@ public sealed class ApiTokensPage : UserControl
 
         Describe(_jira, jira, "Jira");
         Describe(_bitbucket, bitbucket, "Bitbucket");
+
+        // Deliberately kept out of _emailBox: that field is the Atlassian account address, and
+        // this credential carries a GitLab username in its place.
+        Describe(_gitlab, _sp.GetRequiredService<GitLabApiTokenRepository>().Get(), "GitLab");
     }
 
     private static void Describe(TokenSection section, AtlassianCredential? credential, string which)
@@ -177,6 +217,63 @@ public sealed class ApiTokensPage : UserControl
         _sp.GetRequiredService<BitbucketApiTokenRepository>().Save(email, token);
         Stored(_bitbucket, token, "Bitbucket accepted the token.");
     }
+
+    /// <summary>
+    /// GitLab needs no email - the token alone authenticates - so this skips the email check
+    /// the two Atlassian sections share, and stores the username the probe reports instead.
+    /// </summary>
+    private async Task SaveGitLabAsync()
+    {
+        var token = _gitlab.Token.Text.Trim();
+        if (token.Length == 0) { Fail(_gitlab, "Paste a token first."); return; }
+
+        var (ok, detail) = await ProbeGitLabAsync(token);
+        if (!ok)
+        {
+            // The most likely mistake by far: a token minted for git access, or a
+            // fine-grained one without read_api. GitLab names the reason in the body.
+            if (detail.Contains("insufficient_scope", StringComparison.OrdinalIgnoreCase))
+                detail = "That token reached GitLab but carries the wrong scope - it needs "
+                       + "read_api. A token created for git access will not work here.";
+            Fail(_gitlab, detail);
+            return;
+        }
+
+        _sp.GetRequiredService<GitLabApiTokenRepository>().Save(detail, token);
+        Stored(_gitlab, token, $"GitLab accepted the token for {detail}.");
+    }
+
+    /// <summary>Returns the GitLab username on success, so the caller can store it.</summary>
+    private async Task<(bool Ok, string Detail)> ProbeGitLabAsync(string token)
+    {
+        try
+        {
+            using var http = _sp.GetRequiredService<IHttpClientFactory>().CreateClient();
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get, "https://gitlab.com/api/v4/user");
+            request.Headers.Add("PRIVATE-TOKEN", token);
+
+            using var response = await http.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+                return (false, $"{(int)response.StatusCode}: {Trim(body)}");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var username = doc.RootElement.TryGetProperty("username", out var u)
+                ? u.GetString()
+                : null;
+
+            return (true, string.IsNullOrWhiteSpace(username) ? "your GitLab account" : username);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "GitLab token test failed");
+            return (false, ex.Message);
+        }
+    }
+
+    private void OpenGitLabTokenPage() => OpenUrl(GitLabTokenPageUrl, "GitLab");
 
     private bool Validate(TokenSection section, string email, string token)
     {
@@ -239,19 +336,21 @@ public sealed class ApiTokensPage : UserControl
             + "token is not left on screen.");
     }
 
-    private void OpenTokenPage()
+    private void OpenTokenPage() => OpenUrl(TokenPageUrl, "Atlassian");
+
+    private void OpenUrl(string url, string which)
     {
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = TokenPageUrl,
+                FileName = url,
                 UseShellExecute = true
             });
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Could not open the Atlassian token page");
+            _log.LogWarning(ex, "Could not open the {Which} token page", which);
         }
     }
 
