@@ -17,8 +17,20 @@ WireMock.Net.
 
 **Spec:** `docs/superpowers/specs/2026-09-03-claude-ticket-estimation-design.md`
 
-**Status: executed 2026-09-04.** All ten tasks are done and on `claude-ticket-estimation`;
-611 tests pass. Two deliberate deviations from the plan as written are noted inline below.
+**Status: partly executed 2026-09-04.** Tasks 1-9 are done on `claude-ticket-estimation`, with
+611 tests passing, and Task 10 steps 1-5 (publish, deploy, launch, token stored) are done.
+
+**Task 10 steps 6-8 remain: the end-to-end path has never run against a real ticket.** No To-Do
+SN ticket carries an unfetched GitLab link - SN-305 is `done` in `ticket_estimate` and already
+has an Original Estimate, and SN-205 is estimated and has no link. The GitLab path is proven by
+12 WireMock tests and one live `/api/v4/user` probe, not by a worker run.
+
+**The token has not been rotated,** and now exists in plaintext in three places: the chat
+transcript it was pasted into, the PowerShell history of `--set-gitlab-token`
+(`(Get-PSReadLineOption).HistorySavePath`), and this session's HTTP trace. Rotate BEFORE the
+live verification, not after, so the run proves the credential that will actually be in use.
+
+Two deliberate deviations from the plan as written are noted inline below.
 
 ## Why
 
