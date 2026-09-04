@@ -6,7 +6,7 @@ namespace TmTimeTracker.Logic;
 /// Builds the prompt for one estimation run.
 ///
 /// The wording is load-bearing, so it lives here under test rather than inline in the process
-/// launcher. Four things do the work:
+/// launcher. Five things do the work:
 ///
 ///   - The unit is stated explicitly. "Minutes" without a definition silently means human
 ///     minutes, which is a different and much larger number than a Claude Code session's
@@ -16,6 +16,10 @@ namespace TmTimeTracker.Logic;
 ///     so Claude cannot fetch that history itself.
 ///   - Both directions of error are named. Asking only for accuracy reliably produces
 ///     optimism; asking to "be safe" reliably produces padding. The ask is an explicit median.
+///   - Linked issues are fetched by the daemon and pasted in. A ticket here is often a bare
+///     link to a GitLab issue, and the estimation run cannot follow it: --restricted removes
+///     both WebFetch and Bash. Without this the reproduction details are simply absent and the
+///     estimate rests on the summary alone.
 ///   - The rationale must cite files. A rationale that could apply to any ticket is evidence
 ///     the codebase was never read, and the sanity gate can only catch the blatant cases.
 ///
@@ -29,7 +33,8 @@ public static class EstimatePromptBuilder
 
     public static string Build(string ticketKey, string? summary, string? description,
         string repoName, IReadOnlyList<string> recentCommits,
-        IReadOnlyList<string>? attachmentFiles = null)
+        IReadOnlyList<string>? attachmentFiles = null,
+        IReadOnlyList<LinkedIssue>? linkedIssues = null)
     {
         var sb = new StringBuilder();
 
@@ -135,6 +140,28 @@ public static class EstimatePromptBuilder
         sb.AppendLine($"Summary: {flatSummary}");
         sb.AppendLine("Description:");
         sb.AppendLine(Description(description));
+
+        if (linkedIssues is { Count: > 0 })
+        {
+            foreach (var linked in linkedIssues)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Linked issue: {linked.Url}");
+                sb.AppendLine($"Linked issue title: {Flatten(linked.Title)}");
+                sb.AppendLine("Linked issue description:");
+                sb.AppendLine(linked.Description.Length == 0
+                    ? "(no description was provided)"
+                    : linked.Description);
+
+                if (linked.Comments.Count > 0)
+                {
+                    sb.AppendLine("Linked issue comments:");
+                    foreach (var comment in linked.Comments)
+                        sb.AppendLine($"  - {Flatten(comment)}");
+                }
+            }
+        }
+
         sb.AppendLine("--- END TICKET ---");
         sb.AppendLine();
         sb.AppendLine("Return the answer using the structured output tool.");
