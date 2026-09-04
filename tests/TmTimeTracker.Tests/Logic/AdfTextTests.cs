@@ -114,3 +114,97 @@ public class AdfTextTests
         AdfText.Flatten(adf).Should().Be("padded");
     }
 }
+
+/// <summary>
+/// Flattening keeps only visible text, which loses the two shapes a link actually arrives in:
+/// an href on a text node's link mark, and a card node that carries the URL in attrs and has no
+/// text at all. Jira turns a pasted URL into an inlineCard by default, so the card case is the
+/// common one rather than the exotic one.
+/// </summary>
+public class AdfTextUrlsTests
+{
+    private static JsonElement Doc(string json) => JsonDocument.Parse(json).RootElement;
+
+    [Fact]
+    public void Finds_a_url_in_an_inline_card_which_has_no_text()
+    {
+        var adf = Doc("""
+            {"type":"doc","content":[{"type":"paragraph","content":[
+              {"type":"inlineCard","attrs":{"url":"https://gitlab.com/si-bv/stamboekonline/-/work_items/377"}}]}]}
+            """);
+
+        AdfText.Urls(adf).Should()
+            .ContainSingle().Which.Should()
+            .Be("https://gitlab.com/si-bv/stamboekonline/-/work_items/377");
+    }
+
+    [Fact]
+    public void Finds_the_href_of_a_link_mark_even_when_the_display_text_differs()
+    {
+        var adf = Doc("""
+            {"type":"doc","content":[{"type":"paragraph","content":[
+              {"type":"text","text":"see the ticket","marks":[
+                {"type":"link","attrs":{"href":"https://gitlab.com/a/b/-/issues/12"}}]}]}]}
+            """);
+
+        AdfText.Urls(adf).Should().ContainSingle().Which.Should()
+            .Be("https://gitlab.com/a/b/-/issues/12");
+    }
+
+    [Fact]
+    public void Finds_a_bare_url_written_as_plain_text()
+    {
+        var adf = Doc("""
+            {"type":"doc","content":[{"type":"paragraph","content":[
+              {"type":"text","text":"repro: https://gitlab.com/a/b/-/issues/9 thanks"}]}]}
+            """);
+
+        AdfText.Urls(adf).Should().Contain("https://gitlab.com/a/b/-/issues/9");
+    }
+
+    [Fact]
+    public void Also_reads_block_and_embed_cards()
+    {
+        var adf = Doc("""
+            {"type":"doc","content":[
+              {"type":"blockCard","attrs":{"url":"https://gitlab.com/a/b/-/issues/1"}},
+              {"type":"embedCard","attrs":{"url":"https://gitlab.com/a/b/-/issues/2"}}]}
+            """);
+
+        AdfText.Urls(adf).Should().BeEquivalentTo(new[]
+        {
+            "https://gitlab.com/a/b/-/issues/1",
+            "https://gitlab.com/a/b/-/issues/2"
+        });
+    }
+
+    [Fact]
+    public void Returns_each_url_once_even_when_repeated()
+    {
+        var adf = Doc("""
+            {"type":"doc","content":[{"type":"paragraph","content":[
+              {"type":"inlineCard","attrs":{"url":"https://gitlab.com/a/b/-/issues/5"}},
+              {"type":"text","text":"https://gitlab.com/a/b/-/issues/5"}]}]}
+            """);
+
+        AdfText.Urls(adf).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void Drops_the_full_stop_a_sentence_ends_a_link_with()
+    {
+        var adf = Doc("""
+            {"type":"doc","content":[{"type":"paragraph","content":[
+              {"type":"text","text":"see https://gitlab.com/a/b/-/issues/3."}]}]}
+            """);
+
+        AdfText.Urls(adf).Should().ContainSingle().Which.Should()
+            .Be("https://gitlab.com/a/b/-/issues/3");
+    }
+
+    [Fact]
+    public void Returns_empty_for_a_null_description()
+    {
+        AdfText.Urls(null).Should().BeEmpty();
+    }
+}
