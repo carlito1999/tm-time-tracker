@@ -95,7 +95,11 @@ CREATE TABLE IF NOT EXISTS pr_announcement (
     attempts     INTEGER NOT NULL DEFAULT 0,
     announced_at TEXT,
     pr_url       TEXT,
-    warned_at    TEXT
+    warned_at    TEXT,
+    -- Set when the daemon gave up waiting for a fresh pull request and asked the user to announce
+    -- by hand. Kept apart from warned_at because the "no pull request at all" warning does not
+    -- stop the daemon announcing later, and this does.
+    handed_off_at TEXT
 );
 
 -- Basic-auth credential for Jira's internal dev-status API, which does not accept the OAuth

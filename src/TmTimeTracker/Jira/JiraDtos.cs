@@ -95,7 +95,15 @@ public sealed record DevStatusPullRequest(
     [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("url")] string? Url,
     [property: JsonPropertyName("repositoryName")] string? RepositoryName,
-    [property: JsonPropertyName("lastUpdate")] string? LastUpdate);
+    [property: JsonPropertyName("lastUpdate")] string? LastUpdate,
+    [property: JsonPropertyName("source")] DevStatusPullRequestRef? Source = null);
+
+/// <summary>
+/// The branch a pull request was opened from. dev-status has always sent this; it went unread
+/// until the selector needed it to tell one ticket's pull requests from another's.
+/// </summary>
+public sealed record DevStatusPullRequestRef(
+    [property: JsonPropertyName("branch")] string? Branch);
 
 public sealed record WorklogRequest(
     [property: JsonPropertyName("timeSpentSeconds")] int TimeSpentSeconds,

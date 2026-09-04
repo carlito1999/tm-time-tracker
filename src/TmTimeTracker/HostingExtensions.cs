@@ -29,6 +29,9 @@ public static class HostingExtensions
             services.AddSingleton<SlackChannelRepository>();
             services.AddSingleton<JiraSiteRepository>();
             services.AddSingleton<PrAnnouncementRepository>();
+            // Announcements need this to turn a ticket key into a Bitbucket repository, so it
+            // cannot stay behind AddClaudeServices, which the CLI modes deliberately leave out.
+            services.AddSingleton<RepoProjectRepository>();
             services.AddSingleton<JiraApiTokenRepository>();
             services.AddSingleton<BitbucketApiTokenRepository>();
             // The balloon is only the fallback now, live once the tray icon attaches; a no-op in
@@ -41,6 +44,7 @@ public static class HostingExtensions
             services.AddSingleton<IEventBus, EventBus>();
             services.AddSingleton<IIdleProbe, Win32IdleProbe>();
             services.AddSingleton<IGitBranchProbe, GitBranchProbe>();
+            services.AddSingleton<IGitRemoteProbe, GitRemoteProbe>();
             services.AddSingleton<IForegroundWindowProbe, Win32ForegroundWindowProbe>();
             services.AddSingleton<IClaudeCodeActivityProbe, FileClaudeCodeActivityProbe>();
             services.AddSingleton<IClaudeSessionProbe, FileClaudeSessionProbe>();
@@ -128,9 +132,20 @@ public static class HostingExtensions
                 sp.GetRequiredService<JiraApiTokenRepository>(),
                 sp.GetRequiredService<IJiraSiteResolver>(),
                 sp.GetRequiredService<ILogger<BasicAuthDevStatusClient>>()));
-            services.AddSingleton<IPullRequestSource>(sp => new JiraPullRequestSource(
+            services.AddSingleton<JiraPullRequestSource>(sp => new JiraPullRequestSource(
                 sp.GetRequiredService<IDevStatusSource>(),
                 sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
+            services.AddSingleton<TmTimeTracker.Bitbucket.IBitbucketPullRequestSource>(
+                sp => new TmTimeTracker.Bitbucket.BitbucketApiClient(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("bitbucket-api"),
+                    sp.GetRequiredService<BitbucketApiTokenRepository>(),
+                    sp.GetRequiredService<ILogger<TmTimeTracker.Bitbucket.BitbucketApiClient>>()));
+            services.AddSingleton<TmTimeTracker.Bitbucket.BitbucketRepoResolver>();
+            services.AddSingleton<IPullRequestSource>(sp => new BitbucketPullRequestSource(
+                sp.GetRequiredService<TmTimeTracker.Bitbucket.IBitbucketPullRequestSource>(),
+                sp.GetRequiredService<TmTimeTracker.Bitbucket.BitbucketRepoResolver>(),
+                sp.GetRequiredService<JiraPullRequestSource>(),
+                sp.GetRequiredService<ILogger<BitbucketPullRequestSource>>()));
             services.AddSingleton<LocalCallbackListener>();
         });
         return builder;
@@ -169,7 +184,6 @@ public static class HostingExtensions
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<ClaudeAuthRepository>();
-            services.AddSingleton<RepoProjectRepository>();
             services.AddSingleton<RepoBranchRepository>();
             services.AddSingleton<TicketEstimateRepository>();
             services.AddSingleton(new ClaudeEstimatorOptions());

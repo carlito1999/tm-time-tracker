@@ -22,7 +22,8 @@ internal enum AnnouncementOutcome
 ///      periodic discovery so a restart or a missed event cannot lose it).
 ///   2. A queued ticket that has not been announced is polled until Jira reports its pull request.
 ///   3. When the pull request appears, the message is posted and the ticket is marked announced.
-///   4. If no pull request appears within 10 minutes of the branch's last commit, an urgent
+///   4. If no pull request appears within 10 minutes of the branch's last commit, or the only one
+///      on offer is far older than the transition and stays that way for 10 minutes, an urgent
 ///      Windows notification asks the user to announce it manually - once, not repeatedly.
 ///
 /// State lives in the pr_announcement table rather than in memory, because Jira can take longer to
@@ -32,6 +33,25 @@ public sealed class PrAnnouncementWorker : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan WarnAfterLastCommit = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// A pull request untouched for this long before the ticket moved is treated as evidence the
+    /// source has not caught up, not as an answer. On 2026-09-04 SN-291 was announced pointing at
+    /// pull request 353, which had last moved 15h56m before the transition, because 367 had been
+    /// created 15 seconds earlier and Jira's mirror had not ingested it.
+    ///
+    /// Four hours rather than something tighter so the ordinary rhythm of opening a pull request
+    /// in the morning and moving the ticket after lunch is left alone. It is a judgement, not a
+    /// measurement: a pull request genuinely opened yesterday and moved today still trips it, and
+    /// costs the user one manual announcement.
+    /// </summary>
+    private static readonly TimeSpan StaleBeforeTransition = TimeSpan.FromHours(4);
+
+    /// <summary>
+    /// How long to keep waiting for a fresher pull request before handing the job to the user.
+    /// Waiting indefinitely is its own failure: nothing is posted and nobody is told why.
+    /// </summary>
+    private static readonly TimeSpan GiveUpAfter = TimeSpan.FromMinutes(10);
 
     private readonly IEventBus _bus;
     private readonly PrAnnouncementRepository _announcements;
@@ -81,7 +101,11 @@ public sealed class PrAnnouncementWorker : BackgroundService
             try
             {
                 Queue(transition);
-                // Try straight away: usually Jira already knows, and waiting 30s would be silly.
+                // Straight away, because Bitbucket has the pull request the moment it is opened.
+                // This used to read Jira's dev-status mirror, which does not: on 2026-09-04 it was
+                // asked 15 seconds after pull request 367 was created, still had only the
+                // superseded 353, and SN-291 was announced pointing at the wrong one. The
+                // staleness gate below is what keeps that from mattering if a source lags again.
                 await TryAnnounceAsync(transition.TicketKey, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -218,7 +242,8 @@ public sealed class PrAnnouncementWorker : BackgroundService
     internal async Task<AnnouncementOutcome> TryAnnounceAsync(string ticketKey, CancellationToken ct)
     {
         var row = _announcements.Find(ticketKey);
-        if (row is null || row.IsAnnounced) return AnnouncementOutcome.NotApplicable;
+        if (row is null || row.IsAnnounced || row.IsHandedOff)
+            return AnnouncementOutcome.NotApplicable;
 
         var project = JiraProjectKey.From(ticketKey);
         if (project is null) return AnnouncementOutcome.NotApplicable;
@@ -232,13 +257,21 @@ public sealed class PrAnnouncementWorker : BackgroundService
             return AnnouncementOutcome.NotApplicable;
         }
 
-        var snapshot = await _pullRequests.GetSnapshotAsync(row.IssueId, ct).ConfigureAwait(false);
+        var snapshot = await _pullRequests.GetSnapshotAsync(row.IssueId, ticketKey, ct)
+                                          .ConfigureAwait(false);
         var needsPullRequest = SlackVariables.TemplateReferencesPullRequest(mapping.MessageTemplate);
 
         if (needsPullRequest && snapshot.PullRequest is null)
         {
             _announcements.RecordAttempt(ticketKey);
             WarnIfOverdue(row, snapshot, ticketKey);
+            return AnnouncementOutcome.Waiting;
+        }
+
+        if (needsPullRequest && IsStale(snapshot.PullRequest!, row))
+        {
+            _announcements.RecordAttempt(ticketKey);
+            HandOffIfOverdue(row, snapshot.PullRequest!, ticketKey);
             return AnnouncementOutcome.Waiting;
         }
 
@@ -255,6 +288,43 @@ public sealed class PrAnnouncementWorker : BackgroundService
         _log.LogInformation("Announced {Ticket} in #{Channel}", ticketKey, mapping.ChannelName);
 
         return AnnouncementOutcome.Announced;
+    }
+
+    /// <summary>
+    /// Whether the only pull request on offer predates the transition by so much that it cannot
+    /// plausibly be the one just opened.
+    ///
+    /// A source that does not report a timestamp never blocks an announcement: unknown is not the
+    /// same as old, and refusing to post on missing data would be the worse failure.
+    /// </summary>
+    private static bool IsStale(PullRequestInfo pullRequest, PrAnnouncement row) =>
+        pullRequest.UpdatedAtUtc is { } updated &&
+        row.QueuedAtUtc - updated.UtcDateTime > StaleBeforeTransition;
+
+    /// <summary>
+    /// Gives up on a ticket whose pull request never freshened, and tells the user so they can
+    /// announce it themselves.
+    ///
+    /// This has its own deadline rather than reusing <see cref="WarnIfOverdue"/>, which measures
+    /// from the branch's last commit: that commit is stale in exactly this situation, so sharing
+    /// the deadline would fire the warning on the first pass instead of after ten minutes.
+    /// </summary>
+    private void HandOffIfOverdue(PrAnnouncement row, PullRequestInfo pullRequest, string ticketKey)
+    {
+        if (_clock.UtcNow - row.QueuedAtUtc < GiveUpAfter) return;
+
+        // Urgent, so it still arrives under Do Not Disturb: nothing else is going to happen now.
+        _notifier.Show(
+            $"{ticketKey}: no fresh pull request",
+            $"The newest pull request found has not changed since "
+            + $"{pullRequest.UpdatedAtUtc:yyyy-MM-dd HH:mm} UTC, well before this ticket moved to "
+            + $"review, so it is probably not the right one. Announce it yourself.",
+            urgent: true);
+
+        _announcements.MarkHandedOff(ticketKey, _clock.UtcNow);
+        _log.LogWarning(
+            "No pull request newer than {Minutes} minutes after {Ticket} moved to review; " +
+            "handing the announcement to the user", GiveUpAfter.TotalMinutes, ticketKey);
     }
 
     /// <summary>

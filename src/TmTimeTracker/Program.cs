@@ -31,8 +31,8 @@ AppPaths.EnsureExists();
 
 if (args.Length >= 1 && args[0] == "--login")     { await RunCli(b => b, RunLogin); return; }
 if (args.Length == 2 && args[0] == "--probe-jira"){ await RunCli(b => b, h => RunProbe(h, args[1])); return; }
-if (args.Length == 2 && args[0] == "--probe-devstatus")
-    { await RunCli(b => b, h => RunDevStatusProbe(h, args[1])); return; }
+if (args.Length == 3 && args[0] == "--probe-pr")
+    { await RunCli(b => b, h => RunPullRequestProbe(h, args[1], args[2])); return; }
 if (args.Length == 3 && args[0] == "--set-jira-token")
     { await RunCli(b => b, h => SetJiraToken(h, args[1], args[2])); return; }
 if (args.Length == 3 && args[0] == "--set-bitbucket-token")
@@ -233,8 +233,9 @@ static async Task SetBitbucketToken(IHost host, string email, string token)
     await Task.CompletedTask;
 }
 
-// Exercises the same client the worker uses, so a green probe means the worker will work too.
-static async Task RunDevStatusProbe(IHost host, string issueId)
+// Exercises the same source the worker uses - Bitbucket first, Jira's dev-status only as the
+// fallback - so a green probe means the worker will work too.
+static async Task RunPullRequestProbe(IHost host, string issueId, string ticketKey)
 {
     var credential = host.Services.GetRequiredService<JiraApiTokenRepository>().Get();
     if (credential is null)
@@ -249,7 +250,7 @@ static async Task RunDevStatusProbe(IHost host, string issueId)
     Console.WriteLine($"Using basic auth as {credential.Email}.");
 
     var snapshot = await host.Services.GetRequiredService<IPullRequestSource>()
-        .GetSnapshotAsync(issueId, CancellationToken.None);
+        .GetSnapshotAsync(issueId, ticketKey, CancellationToken.None);
 
     var lastCommit = snapshot.LastCommitUtc?.ToString("u") ?? "(none)";
     Console.WriteLine($"last commit: {lastCommit}");

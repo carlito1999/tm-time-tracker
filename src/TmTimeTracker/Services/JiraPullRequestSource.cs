@@ -5,7 +5,13 @@ using TmTimeTracker.Logic;
 
 namespace TmTimeTracker.Services;
 
-public sealed record PullRequestInfo(string Url, string Title, string Status);
+/// <summary>
+/// <paramref name="UpdatedAtUtc"/> is what lets the announcement notice it is being handed a pull
+/// request that has not moved since long before the ticket did - the shape of a source that has
+/// not caught up yet. Null means the source did not say, which never blocks an announcement.
+/// </summary>
+public sealed record PullRequestInfo(
+    string Url, string Title, string Status, DateTimeOffset? UpdatedAtUtc = null);
 
 /// <summary>
 /// What Jira knows about an issue's development activity right now. LastCommitUtc anchors the
@@ -19,7 +25,11 @@ public sealed record DevInfoSnapshot(PullRequestInfo? PullRequest, DateTimeOffse
 
 public interface IPullRequestSource
 {
-    Task<DevInfoSnapshot> GetSnapshotAsync(string? issueId, CancellationToken ct);
+    /// <summary>
+    /// <paramref name="ticketKey"/> is what tells this ticket's pull requests from the strangers
+    /// Jira files under the same issue; without it the newest timestamp wins regardless of owner.
+    /// </summary>
+    Task<DevInfoSnapshot> GetSnapshotAsync(string? issueId, string ticketKey, CancellationToken ct);
 }
 
 /// <summary>
@@ -40,7 +50,8 @@ public sealed class JiraPullRequestSource : IPullRequestSource
         _log = log;
     }
 
-    public async Task<DevInfoSnapshot> GetSnapshotAsync(string? issueId, CancellationToken ct)
+    public async Task<DevInfoSnapshot> GetSnapshotAsync(
+        string? issueId, string ticketKey, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(issueId)) return DevInfoSnapshot.Empty;
 
@@ -60,9 +71,10 @@ public sealed class JiraPullRequestSource : IPullRequestSource
 
             var candidates = (detail.PullRequests ?? Array.Empty<DevStatusPullRequest>())
                 .Select(pr => new PullRequestCandidate(
-                    pr.Id, pr.Name, pr.Status, pr.Url, pr.RepositoryName, pr.LastUpdate));
+                    pr.Id, pr.Name, pr.Status, pr.Url, pr.RepositoryName, pr.LastUpdate,
+                    pr.Source?.Branch));
 
-            var best = PullRequestSelector.Best(candidates);
+            var best = PullRequestSelector.Best(candidates, ticketKey);
             if (best?.Url is null) return new DevInfoSnapshot(null, lastCommit);
 
             // Commit URLs carry the readable workspace slug that the PR URL lacks.
@@ -70,7 +82,8 @@ public sealed class JiraPullRequestSource : IPullRequestSource
             var url = BitbucketPrLink.Build(best.Url, best.Id, best.RepositoryName, commitUrls);
 
             return new DevInfoSnapshot(
-                new PullRequestInfo(url, best.Title ?? string.Empty, best.Status ?? string.Empty),
+                new PullRequestInfo(url, best.Title ?? string.Empty, best.Status ?? string.Empty,
+                                    ParseTimestamp(best.LastUpdate)),
                 lastCommit);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

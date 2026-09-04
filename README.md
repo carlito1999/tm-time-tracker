@@ -260,11 +260,15 @@ The three `PR_*` variables need two things, neither of which is a new credential
 Check it end to end with:
 
 ```powershell
-dotnet run --project src\TmTimeTracker -- --probe-devstatus <numeric issue id>
+dotnet run --project src\TmTimeTracker -- --probe-pr <numeric issue id> <ticket key>
 ```
 
-A `200` means pull-request data is reachable; `401 "scope does not match"` means
-the scope is missing or the app has not been reauthorised since it was added.
+It prints the pull request the announcement would link to. Bitbucket is asked
+first and Jira's dev-status only as a fallback, so the log line shows which one
+answered: a `200` from `api.bitbucket.org` is the healthy path, while falling
+through to dev-status means the Bitbucket token is missing or the repo's git
+remote is not on Bitbucket. A `401 "scope does not match"` from dev-status means
+the Jira scope is missing or the app has not been reauthorised since it was added.
 
 ### How announcing works
 
@@ -274,14 +278,28 @@ to a restart:
 1. Any tracked ticket sitting in the review status is queued — both from the
    transition event and by a sweep every 30s, so a missed event or a restart
    mid-wait recovers on its own.
-2. A queued ticket that has not been announced is polled until Jira reports its
-   pull request. Nothing is posted with a literal `{PR_URL}` in it.
+2. A queued ticket that has not been announced is polled until its pull request is
+   found. Nothing is posted with a literal `{PR_URL}` in it.
 3. When the pull request appears, the message is posted and the ticket is marked
    announced — it can never be announced twice.
-4. If **10 minutes pass since the branch's last commit** and Jira still reports no
-   pull request, an **urgent Windows notification** tells you to announce it
+
+   The one picked is the **newest pull request whose branch or title carries the
+   ticket key**, preferring an open one, ranked by **pull request id** rather than
+   by when it was last updated. Ids only ever go up, so a branch that has been
+   re-PR'd against successive `main-DD-MM-YYYY` snapshots always resolves to the
+   latest — and a comment on a superseded one cannot drag it back to the top.
+   Pull requests belonging to other tickets are ignored outright; Jira's
+   dev-status files them under the wrong issue often enough to matter.
+4. If **10 minutes pass since the branch's last commit** and no pull request is
+   reported, an **urgent Windows notification** tells you to announce it
    yourself. Once per ticket, not every poll. Polling continues in case it turns
    up later.
+5. If the only pull request on offer **has not changed since more than 4 hours
+   before the ticket moved to review**, it is treated as a source that has not
+   caught up rather than as an answer, and nothing is posted. After **10 minutes**
+   of that, the same urgent notification hands the job to you — and this one
+   stops the daemon announcing the ticket at all, so it cannot duplicate a message
+   you posted by hand. Moving the ticket out of review and back clears it.
 
    Urgent means the toast is allowed to break through Do Not Disturb. Windows asks
    you to permit that the first time one arrives; until you do, it behaves like an

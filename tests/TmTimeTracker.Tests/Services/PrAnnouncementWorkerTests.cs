@@ -51,7 +51,8 @@ public class PrAnnouncementWorkerTests
             channels.Upsert(new SlackChannelMapping("SN", "C1", "sheeponline", template));
 
         var pullRequests = new Mock<IPullRequestSource>();
-        pullRequests.Setup(p => p.GetSnapshotAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        pullRequests.Setup(p => p.GetSnapshotAsync(
+                        It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                     .ReturnsAsync(snapshot ?? DevInfoSnapshot.Empty);
 
         var site = new Mock<IJiraSiteResolver>();
@@ -93,8 +94,12 @@ public class PrAnnouncementWorkerTests
         h.Tickets.UpdateStatusSnapshot(cycle.Id, status, new DateTime(2026, 9, 2, 9, 0, 0, DateTimeKind.Utc));
     }
 
-    private static DevInfoSnapshot WithPr(DateTimeOffset? lastCommit = null) =>
-        new(new PullRequestInfo(PrUrl, "SN-298-257: refactor", "OPEN"), lastCommit);
+    private static DevInfoSnapshot WithPr(
+        DateTimeOffset? lastCommit = null, DateTimeOffset? updatedAt = null) =>
+        new(new PullRequestInfo(PrUrl, "SN-298-257: refactor", "OPEN", updatedAt), lastCommit);
+
+    private static readonly DateTimeOffset Queued =
+        new(2026, 9, 2, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
     public async Task Announces_and_records_it_once_the_pull_request_is_known()
@@ -288,5 +293,111 @@ public class PrAnnouncementWorkerTests
 
         h.Notifier.Verify(n => n.Show(
             It.Is<string>(t => t.Contains("SN-298")), It.IsAny<string>(), true), Times.Once);
+    }
+
+    // SN-291 announced pull request 353 on 2026-09-04 because 353 was the freshest thing the
+    // source knew about - and it had last moved sixteen hours earlier. A pull request that has not
+    // been touched since long before the ticket moved is evidence the source is behind, not an
+    // answer.
+    [Fact]
+    public async Task Waits_rather_than_announcing_a_pull_request_much_older_than_the_transition()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-16)));
+        QueueTicket(h);
+
+        var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        outcome.Should().Be(AnnouncementOutcome.Waiting);
+        h.Slack.Verify(s => s.PostMessageAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Announces_a_pull_request_updated_since_the_ticket_moved()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddMinutes(-1)));
+        QueueTicket(h);
+
+        var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        outcome.Should().Be(AnnouncementOutcome.Announced);
+    }
+
+    // Opening the pull request in the morning and moving the ticket after lunch is ordinary, so
+    // the window has to be wide enough to leave that alone.
+    [Fact]
+    public async Task Announces_a_pull_request_updated_a_few_hours_before_the_ticket_moved()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-3)));
+        QueueTicket(h);
+
+        var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        outcome.Should().Be(AnnouncementOutcome.Announced);
+    }
+
+    // Waiting forever is its own failure: the user hears nothing and the announcement never
+    // happens. Ten minutes in, the job is handed to them.
+    [Fact]
+    public async Task Hands_off_with_an_urgent_notification_after_ten_minutes_of_staleness()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-16)));
+        QueueTicket(h);
+        h.Clock.UtcNow = Queued.UtcDateTime.AddMinutes(11);
+
+        var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        outcome.Should().Be(AnnouncementOutcome.Waiting);
+        h.Notifier.Verify(n => n.Show(
+            It.Is<string>(t => t.Contains("SN-298")), It.IsAny<string>(), true), Times.Once);
+        h.Slack.Verify(s => s.PostMessageAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Does_not_warn_about_a_stale_pull_request_before_the_deadline()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-16)));
+        QueueTicket(h);
+        h.Clock.UtcNow = Queued.UtcDateTime.AddMinutes(5);
+
+        await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        h.Notifier.Verify(n => n.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
+            Times.Never);
+    }
+
+    // Once the user has been told to announce it themselves, the daemon posting too would be the
+    // duplicate message the toast notifier exists to prevent.
+    [Fact]
+    public async Task Does_not_announce_after_handing_off_even_when_a_fresh_pull_request_appears()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-16)));
+        QueueTicket(h);
+        h.Clock.UtcNow = Queued.UtcDateTime.AddMinutes(11);
+        await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        h.PullRequests.Setup(p => p.GetSnapshotAsync(
+                It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(WithPr(updatedAt: Queued.AddMinutes(12)));
+
+        var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        outcome.Should().Be(AnnouncementOutcome.NotApplicable);
+        h.Slack.Verify(s => s.PostMessageAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // A handed-off row must also drop out of the polling sweep, or the daemon keeps asking the
+    // source about a ticket it has already given up on.
+    [Fact]
+    public async Task A_handed_off_ticket_is_no_longer_pending()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-16)));
+        QueueTicket(h);
+        h.Clock.UtcNow = Queued.UtcDateTime.AddMinutes(11);
+        await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        h.Announcements.GetPending().Should().BeEmpty();
     }
 }

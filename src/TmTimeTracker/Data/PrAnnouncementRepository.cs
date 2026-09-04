@@ -15,10 +15,19 @@ public sealed record PrAnnouncement(
     int Attempts,
     DateTime? AnnouncedAtUtc,
     string? PrUrl,
-    DateTime? WarnedAtUtc)
+    DateTime? WarnedAtUtc,
+    DateTime? HandedOffAtUtc = null)
 {
     public bool IsAnnounced => AnnouncedAtUtc is not null;
     public bool HasWarned => WarnedAtUtc is not null;
+
+    /// <summary>
+    /// The daemon gave up waiting for a fresh pull request and asked the user to announce it by
+    /// hand. Distinct from <see cref="HasWarned"/>: that one only stops the warning repeating,
+    /// while this stops the announcement happening at all - posting after the user has been sent
+    /// to do it themselves would duplicate the message.
+    /// </summary>
+    public bool IsHandedOff => HandedOffAtUtc is not null;
 }
 
 /// <summary>
@@ -59,7 +68,9 @@ public sealed class PrAnnouncementRepository
     {
         using var conn = _factory.Open();
         return conn.Query<Row>(
-            "SELECT * FROM pr_announcement WHERE announced_at IS NULL ORDER BY queued_at")
+            @"SELECT * FROM pr_announcement
+              WHERE announced_at IS NULL AND handed_off_at IS NULL
+              ORDER BY queued_at")
             .Select(Map).ToList();
     }
 
@@ -77,6 +88,13 @@ public sealed class PrAnnouncementRepository
         conn.Execute(
             "UPDATE pr_announcement SET announced_at = @at, pr_url = @url WHERE ticket_key = @key",
             new { key = ticketKey, at = Iso(atUtc), url = prUrl });
+    }
+
+    public void MarkHandedOff(string ticketKey, DateTime atUtc)
+    {
+        using var conn = _factory.Open();
+        conn.Execute("UPDATE pr_announcement SET handed_off_at = @at WHERE ticket_key = @key",
+            new { key = ticketKey, at = Iso(atUtc) });
     }
 
     public void MarkWarned(string ticketKey, DateTime atUtc)
@@ -122,7 +140,8 @@ public sealed class PrAnnouncementRepository
         ParseUtc(r.occurred_at), ParseUtc(r.queued_at), r.attempts,
         r.announced_at is null ? null : ParseUtc(r.announced_at),
         r.pr_url,
-        r.warned_at is null ? null : ParseUtc(r.warned_at));
+        r.warned_at is null ? null : ParseUtc(r.warned_at),
+        r.handed_off_at is null ? null : ParseUtc(r.handed_off_at));
 
     private sealed class Row
     {
@@ -138,5 +157,6 @@ public sealed class PrAnnouncementRepository
         public string? announced_at { get; set; }
         public string? pr_url { get; set; }
         public string? warned_at { get; set; }
+        public string? handed_off_at { get; set; }
     }
 }
