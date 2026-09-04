@@ -17,6 +17,9 @@ WireMock.Net.
 
 **Spec:** `docs/superpowers/specs/2026-09-03-claude-ticket-estimation-design.md`
 
+**Status: executed 2026-09-04.** All ten tasks are done and on `claude-ticket-estimation`;
+611 tests pass. Two deliberate deviations from the plan as written are noted inline below.
+
 ## Why
 
 SN-305's Jira description is one line: a link to
@@ -648,6 +651,16 @@ git commit -m "feat: store a GitLab API token beside the Jira and Bitbucket ones
   - `public interface IGitLabIssueSource { Task<LinkedIssue?> FetchAsync(GitLabIssueRef link, CancellationToken ct); }`
   - `public sealed class GitLabApiClient : IGitLabIssueSource` with constructor
     `(HttpClient http, GitLabApiTokenRepository credentials, ILogger<GitLabApiClient> log, string? apiBaseOverride = null)`.
+
+**Deviation, as built:** no `IGitLabCredentialSource` was introduced. `BitbucketApiClient` takes
+its concrete `BitbucketApiTokenRepository` and its tests open an in-memory SQLite database, so
+the GitLab client follows that established pattern rather than adding an abstraction the
+codebase does not otherwise use.
+
+**Deviation, as built:** WireMock matches on the DECODED request path, so the stubs use
+`/projects/si-bv/stamboekonline/issues/377`. That the request really goes out percent-encoded is
+asserted separately against `RequestMessage.Url` - asserting it against `Path` would pass even
+if the client sent a bare slash, which reaches a different GitLab endpoint entirely.
 
 - [ ] **Step 1: Write the failing tests**
 
