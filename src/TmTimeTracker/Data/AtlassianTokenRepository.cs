@@ -74,3 +74,15 @@ public sealed class BitbucketApiTokenRepository : AtlassianTokenRepository
     public BitbucketApiTokenRepository(ISqliteConnectionFactory factory, ITokenProtector protector)
         : base(factory, protector, "bitbucket_api_token") { }
 }
+
+/// <summary>
+/// Reads the GitLab REST API. Needs a Personal Access Token carrying read_api.
+///
+/// The email column holds the GitLab username instead of an address: GitLab authenticates with
+/// the token alone, and the settings page needs something to show back.
+/// </summary>
+public sealed class GitLabApiTokenRepository : AtlassianTokenRepository
+{
+    public GitLabApiTokenRepository(ISqliteConnectionFactory factory, ITokenProtector protector)
+        : base(factory, protector, "gitlab_api_token") { }
+}

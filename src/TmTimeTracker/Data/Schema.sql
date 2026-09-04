@@ -117,6 +117,17 @@ CREATE TABLE IF NOT EXISTS bitbucket_api_token (
     token_dpapi BLOB NOT NULL
 );
 
+-- GitLab's REST API needs a third token again: a Personal Access Token carrying read_api. The
+-- credential Git Credential Manager stores for gitlab.com authenticates git transport only and
+-- answers 403 insufficient_scope to every /api/v4 call, so it cannot be reused. The email column
+-- holds the GitLab username, resolved from /api/v4/user - GitLab authenticates with the token
+-- alone and never sees an address.
+CREATE TABLE IF NOT EXISTS gitlab_api_token (
+    id          INTEGER PRIMARY KEY CHECK(id = 1),
+    email       TEXT NOT NULL,
+    token_dpapi BLOB NOT NULL
+);
+
 -- Which Jira project's board covers a tracked repo. A separate table rather than a column on
 -- tracked_repo: DatabaseInitializer only runs CREATE TABLE IF NOT EXISTS, and SQLite has no
 -- ADD COLUMN IF NOT EXISTS, so a new table stays idempotent with no migration machinery.
