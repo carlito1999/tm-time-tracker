@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TmTimeTracker.Data;
+using TmTimeTracker.GitLab;
 using TmTimeTracker.Jira;
 using TmTimeTracker.Logic;
 using TmTimeTracker.Platform;
@@ -51,6 +52,7 @@ public sealed class TicketEstimationWorker : BackgroundService
     private readonly IClaudeEstimator _claude;
     private readonly IGitWorktreeManager _worktrees;
     private readonly TicketAttachmentFetcher _attachments;
+    private readonly IGitLabIssueSource _gitlab;
     private readonly IUserNotifier _notifier;
     private readonly IClock _clock;
     private readonly ILogger<TicketEstimationWorker> _log;
@@ -66,13 +68,13 @@ public sealed class TicketEstimationWorker : BackgroundService
         TicketEstimateRepository estimates, IJiraSearchSource search,
         IJiraIssueSource issues, IJiraEstimateWriter writer, IJiraProjectSource projects,
         IClaudeEstimator claude, IGitWorktreeManager worktrees,
-        TicketAttachmentFetcher attachments, IUserNotifier notifier,
+        TicketAttachmentFetcher attachments, IGitLabIssueSource gitlab, IUserNotifier notifier,
         IClock clock, ILogger<TicketEstimationWorker> log)
     {
         _repos = repos; _mappings = mappings; _branches = branches;
         _estimates = estimates; _search = search;
         _issues = issues; _writer = writer; _projects = projects; _claude = claude;
-        _worktrees = worktrees; _attachments = attachments;
+        _worktrees = worktrees; _attachments = attachments; _gitlab = gitlab;
         _notifier = notifier; _clock = clock; _log = log;
     }
 
@@ -186,9 +188,11 @@ public sealed class TicketEstimationWorker : BackgroundService
         var attachmentFiles = await _attachments
             .FetchAsync(worktree, issue.Key, issue.Fields.Attachments, ct).ConfigureAwait(false);
 
+        var linked = await LinkedIssuesAsync(issue, ct).ConfigureAwait(false);
+
         var prompt = EstimatePromptBuilder.Build(
             issue.Key, issue.Fields.Summary, AdfText.Flatten(issue.Fields.Description),
-            Name(repoPath), commits, attachmentFiles);
+            Name(repoPath), commits, attachmentFiles, linked);
 
         EstimateParse? parse = null;
         string? rawOutput = null;
@@ -233,6 +237,47 @@ public sealed class TicketEstimationWorker : BackgroundService
         }
 
         await StoreAsync(issue.Key, parse.Value!, rawOutput, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads any GitLab issues the description links to.
+    ///
+    /// AdfText.Urls rather than the flattened text: Jira stores a pasted link as an inlineCard
+    /// node, which carries the URL in attrs and has no text at all, so flattening loses it
+    /// entirely - and a description that is nothing but a link flattens to an empty string.
+    ///
+    /// A failure here is never fatal. The ticket is estimated from its Jira text alone, which is
+    /// exactly the behaviour that existed before this method.
+    /// </summary>
+    private async Task<IReadOnlyList<LinkedIssue>> LinkedIssuesAsync(
+        Issue issue, CancellationToken ct)
+    {
+        var links = GitLabIssueLink.FindAll(AdfText.Urls(issue.Fields.Description));
+        if (links.Count == 0) return Array.Empty<LinkedIssue>();
+
+        var fetched = new List<LinkedIssue>();
+        foreach (var link in links)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var linked = await _gitlab.FetchAsync(link, ct).ConfigureAwait(false);
+                if (linked is not null) fetched.Add(linked);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Could not read {Url} for {Ticket}", link.Url, issue.Key);
+            }
+        }
+
+        if (fetched.Count > 0)
+        {
+            _log.LogInformation(
+                "Read {Count} linked issue(s) for {Ticket}", fetched.Count, issue.Key);
+        }
+
+        return fetched;
     }
 
     /// <summary>

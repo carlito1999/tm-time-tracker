@@ -1,7 +1,9 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TmTimeTracker.Data;
+using TmTimeTracker.GitLab;
 using TmTimeTracker.Jira;
 using TmTimeTracker.Logic;
 using TmTimeTracker.Platform;
@@ -60,6 +62,10 @@ public class TicketEstimationWorkerTests
         public required Mock<IClaudeEstimator> Claude { get; init; }
         public required Mock<IUserNotifier> Notifier { get; init; }
         public required Mock<IGitWorktreeManager> Worktrees { get; init; }
+        public required Mock<IGitLabIssueSource> GitLab { get; init; }
+        public required List<string> Prompts { get; init; }
+
+        public string LastPrompt => Prompts[^1];
         public required List<string> Jql { get; init; }
     }
 
@@ -69,7 +75,8 @@ public class TicketEstimationWorkerTests
         Queue<string>? claudeOutputs = null,
         bool jiraAcceptsWrites = true,
         int? existingEstimateSeconds = null,
-        IReadOnlyList<JiraProject>? projects = null)
+        IReadOnlyList<JiraProject>? projects = null,
+        JsonElement? description = null)
     {
         var factory = SharedSqlite.NewInMemory();
         new DatabaseInitializer(factory).EnsureCreated();
@@ -87,7 +94,7 @@ public class TicketEstimationWorkerTests
         var search = new Mock<IJiraSearchSource>();
         search.Setup(s => s.SearchIssuesAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
               .Callback<string, CancellationToken>((q, _) => jql.Add(q))
-              .ReturnsAsync(issues ?? new[] { Issue("TM-1", existingEstimateSeconds) });
+              .ReturnsAsync(issues ?? new[] { Issue("TM-1", existingEstimateSeconds, description) });
 
         var reader = new Mock<IJiraIssueSource>();
         reader.Setup(r => r.GetIssueAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -103,8 +110,10 @@ public class TicketEstimationWorkerTests
                      .ReturnsAsync(projects ?? new[] { new JiraProject("TM", "Training Manager") });
 
         var outputs = claudeOutputs ?? new Queue<string>(new[] { Output() });
+        var prompts = new List<string>();
         var claude = new Mock<IClaudeEstimator>();
         claude.Setup(c => c.RunAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+              .Callback<string, string, CancellationToken>((_, prompt, _) => prompts.Add(prompt))
               .ReturnsAsync(() => new ClaudeRun(0, outputs.Count > 0 ? outputs.Dequeue() : Output(),
                   "", TimedOut: false));
 
@@ -125,12 +134,18 @@ public class TicketEstimationWorkerTests
         var fetcher = new TicketAttachmentFetcher(attachmentSource.Object,
             NullLogger<TicketAttachmentFetcher>.Instance);
 
+        // Reads nothing unless a test says otherwise: most tickets carry no linked issue, and a
+        // fetch that returns null must leave the estimate exactly as it was.
+        var gitlab = new Mock<IGitLabIssueSource>();
+        gitlab.Setup(g => g.FetchAsync(It.IsAny<GitLabIssueRef>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync((LinkedIssue?)null);
+
         return new Harness
         {
             Worker = new TicketEstimationWorker(repos, mappings,
                 new RepoBranchRepository(factory), estimates, search.Object,
                 reader.Object, writer.Object, projectSource.Object, claude.Object,
-                worktrees.Object, fetcher, notifier.Object, new FixedClock(),
+                worktrees.Object, fetcher, gitlab.Object, notifier.Object, new FixedClock(),
                 NullLogger<TicketEstimationWorker>.Instance),
             Estimates = estimates,
             Mappings = mappings,
@@ -138,16 +153,26 @@ public class TicketEstimationWorkerTests
             Claude = claude,
             Notifier = notifier,
             Worktrees = worktrees,
+            GitLab = gitlab,
+            Prompts = prompts,
             Jql = jql
         };
     }
 
-    private static Issue Issue(string key, int? estimateSeconds = null) =>
+    private static Issue Issue(string key, int? estimateSeconds = null,
+        JsonElement? description = null) =>
         new(key, new IssueFields(
             new IssueStatus("To Do", new StatusCategory("new", "To Do")),
             Summary: "Add a retry to the poll loop",
-            TimeTracking: estimateSeconds is null ? null : new JiraTimeTracking(estimateSeconds)),
+            TimeTracking: estimateSeconds is null ? null : new JiraTimeTracking(estimateSeconds),
+            Description: description),
             Id: "10001");
+
+    /// <summary>An ADF description whose only content is a link, the way SN-305's is.</summary>
+    private static JsonElement LinkOnlyDescription(string url) =>
+        JsonDocument.Parse(
+            "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":["
+            + "{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"" + url + "\"}}]}]}").RootElement;
 
     // --- the happy path ------------------------------------------------------------------
 
@@ -458,5 +483,64 @@ public class TicketEstimationWorkerTests
 
         h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Failed);
         h.Estimates.Find("TM-2")!.Status.Should().Be(EstimateStatus.Done);
+    }
+
+    // --- linked GitLab issues ------------------------------------------------------------
+
+    // SN-305's description was nothing but a link to work item 377, and the estimate came back
+    // saying the root cause was unknown from the ticket alone.
+    [Fact]
+    public async Task Fetches_a_gitlab_issue_linked_from_the_description_and_puts_it_in_the_prompt()
+    {
+        var h = Build(description: LinkOnlyDescription(
+            "https://gitlab.com/si-bv/stamboekonline/-/work_items/377"));
+
+        h.GitLab
+         .Setup(g => g.FetchAsync(
+             It.Is<GitLabIssueRef>(l => l.Iid == 377 && l.ProjectPath == "si-bv/stamboekonline"),
+             It.IsAny<CancellationToken>()))
+         .ReturnsAsync(new LinkedIssue(
+             "https://gitlab.com/si-bv/stamboekonline/-/work_items/377", 377,
+             "si-bv/stamboekonline", "Ancestry is not shown",
+             "not the ancestry overview", Array.Empty<string>()));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.LastPrompt.Should().Contain("not the ancestry overview");
+    }
+
+    // The link lives in an inlineCard, which carries no text at all, so a worker reading the
+    // flattened description would never see it.
+    [Fact]
+    public async Task Finds_the_link_even_though_flattening_the_description_yields_nothing()
+    {
+        var h = Build(description: LinkOnlyDescription("https://gitlab.com/a/b/-/issues/9"));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.GitLab.Verify(g => g.FetchAsync(
+            It.Is<GitLabIssueRef>(l => l.Iid == 9), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Still_estimates_when_the_linked_issue_cannot_be_read()
+    {
+        var h = Build(description: LinkOnlyDescription("https://gitlab.com/a/b/-/issues/1"));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Jira.StoredSeconds.Should().NotBeNull();
+        h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Done);
+    }
+
+    [Fact]
+    public async Task Does_not_call_gitlab_when_the_description_has_no_link()
+    {
+        var h = Build();
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.GitLab.Verify(g => g.FetchAsync(
+            It.IsAny<GitLabIssueRef>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }
