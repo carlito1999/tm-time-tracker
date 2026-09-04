@@ -400,4 +400,27 @@ public class PrAnnouncementWorkerTests
 
         h.Announcements.GetPending().Should().BeEmpty();
     }
+
+    // The recovery the gate exists for: the source was behind on the first pass and caught up
+    // before the deadline, so the fresh pull request is the one announced.
+    [Fact]
+    public async Task Announces_the_fresh_pull_request_once_the_source_catches_up()
+    {
+        var h = Build(WithPr(updatedAt: Queued.AddHours(-16)));
+        QueueTicket(h);
+        (await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None))
+            .Should().Be(AnnouncementOutcome.Waiting);
+
+        h.Clock.UtcNow = Queued.UtcDateTime.AddMinutes(2);
+        h.PullRequests.Setup(p => p.GetSnapshotAsync(
+                It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(WithPr(updatedAt: Queued.AddMinutes(1)));
+
+        var outcome = await h.Worker.TryAnnounceAsync("SN-298", CancellationToken.None);
+
+        outcome.Should().Be(AnnouncementOutcome.Announced);
+        h.Slack.Verify(s => s.PostMessageAsync("C1", $"SN-298 {PrUrl}",
+            It.IsAny<CancellationToken>()), Times.Once);
+        h.Announcements.Find("SN-298")!.PrUrl.Should().Be(PrUrl);
+    }
 }
