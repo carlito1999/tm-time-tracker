@@ -34,6 +34,7 @@ public static class HostingExtensions
             services.AddSingleton<RepoProjectRepository>();
             services.AddSingleton<JiraApiTokenRepository>();
             services.AddSingleton<BitbucketApiTokenRepository>();
+            services.AddSingleton<GitLabApiTokenRepository>();
             // The balloon is only the fallback now, live once the tray icon attaches; a no-op in
             // the headless CLI modes. Toasts work in every mode, tray icon or not.
             services.AddSingleton<TmTimeTracker.UI.TrayBalloonNotifier>();
@@ -191,6 +192,12 @@ public static class HostingExtensions
             services.AddSingleton<IGitWorktreeManager>(sp =>
                 new GitWorktreeManager(sp.GetRequiredService<ILogger<GitWorktreeManager>>()));
             services.AddSingleton<TicketAttachmentFetcher>();
+            // Only the estimator reads linked issues, so this stays behind AddClaudeServices.
+            services.AddSingleton<TmTimeTracker.GitLab.IGitLabIssueSource>(
+                sp => new TmTimeTracker.GitLab.GitLabApiClient(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("gitlab-api"),
+                    sp.GetRequiredService<GitLabApiTokenRepository>(),
+                    sp.GetRequiredService<ILogger<TmTimeTracker.GitLab.GitLabApiClient>>()));
             services.AddHostedService<TicketEstimationWorker>();
         });
         return builder;
