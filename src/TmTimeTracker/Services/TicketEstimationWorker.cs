@@ -288,7 +288,10 @@ public sealed class TicketEstimationWorker : BackgroundService
     private async Task StoreAsync(string ticketKey, TicketEstimate estimate, string? rawOutput,
         CancellationToken ct)
     {
-        var minutes = estimate.TotalMinutes;
+        // Jira gets the rounded figure; ticket_estimate keeps the raw phases, so the
+        // arithmetic behind the number stays auditable. Gate 4 reads back what was written.
+        var raw = estimate.TotalMinutes;
+        var minutes = EstimateRounding.CeilingToQuarterHour(raw);
         string? lastError = null;
 
         for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
@@ -301,8 +304,8 @@ public sealed class TicketEstimationWorker : BackgroundService
                 {
                     _estimates.MarkDone(ticketKey, estimate, rawOutput, _clock.UtcNow);
                     _log.LogInformation(
-                        "Estimated {Ticket} at {Minutes} minutes ({Impl}+{Test}+{Review}), confidence {Confidence}",
-                        ticketKey, minutes, estimate.ImplementationMinutes,
+                        "Estimated {Ticket} at {Minutes} minutes (rounded up from {Raw}: {Impl}+{Test}+{Review}), confidence {Confidence}",
+                        ticketKey, minutes, raw, estimate.ImplementationMinutes,
                         estimate.TestingMinutes, estimate.ReviewMinutes, estimate.Confidence);
                     return;
                 }

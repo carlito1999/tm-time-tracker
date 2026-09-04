@@ -176,15 +176,30 @@ public class TicketEstimationWorkerTests
 
     // --- the happy path ------------------------------------------------------------------
 
+    // 90+30+20 = 140, which is not on the quarter-hour grid, so Jira receives 150. The raw
+    // phases are still what Records_the_three_phases_it_was_given asserts.
     [Fact]
-    public async Task Writes_the_total_estimate_to_jira()
+    public async Task Writes_the_total_estimate_to_jira_rounded_up_to_a_quarter_hour()
     {
         var h = Build();
 
         await h.Worker.RunOnceAsync(CancellationToken.None);
 
-        h.Jira.StoredSeconds.Should().Be(140 * 60);
+        h.Jira.StoredSeconds.Should().Be(150 * 60);
         h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Done);
+    }
+
+    // Gate 4 compares Jira's stored value against what was written, so it has to read back the
+    // rounded figure - comparing against the raw total would fail every time it rounded.
+    [Fact]
+    public async Task Passes_gate_four_against_the_rounded_figure()
+    {
+        var h = Build();
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Done);
+        h.Jira.StoredSeconds.Should().Be(EstimateRounding.CeilingToQuarterHour(140) * 60);
     }
 
     [Fact]
