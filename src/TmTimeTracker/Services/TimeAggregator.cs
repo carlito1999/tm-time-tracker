@@ -28,6 +28,7 @@ public sealed class TimeAggregator : BackgroundService
     private readonly IEventBus _bus;
     private readonly IRepoActivitySource _source;
     private readonly TicketTimeRepository _tickets;
+    private readonly HourActivityRepository _hours;
     private readonly IClock _clock;
     private readonly ILogger<TimeAggregator> _log;
 
@@ -48,9 +49,9 @@ public sealed class TimeAggregator : BackgroundService
         new(StringComparer.OrdinalIgnoreCase);
 
     public TimeAggregator(IEventBus bus, IRepoActivitySource source, TicketTimeRepository tickets,
-        IClock clock, ILogger<TimeAggregator> log)
+        HourActivityRepository hours, IClock clock, ILogger<TimeAggregator> log)
     {
-        _bus = bus; _source = source; _tickets = tickets; _clock = clock; _log = log;
+        _bus = bus; _source = source; _tickets = tickets; _hours = hours; _clock = clock; _log = log;
         _lastTickUtc = clock.UtcNow;
     }
 
@@ -81,9 +82,19 @@ public sealed class TimeAggregator : BackgroundService
         }
         _lastTickUtc = now;
 
+        // Local, because the report this feeds asks a local-calendar question.
+        var hour = _clock.LocalNow.DateTime;
+
         var toCredit = new List<string>();
         foreach (var repo in sample)
         {
+            // The ledger records the raw sample, before attribution: a minute on a branch with no
+            // ticket is banked in memory and reaches ticket_time only later under the next ticket,
+            // but the hour it was actually spent in still belongs to this repo. Guarded separately
+            // from Accrue so a reporting write can never cost a minute its worklog credit.
+            try { _hours.CreditMinute(hour, repo.RepoPath, repo.TicketKey ?? ""); }
+            catch (Exception ex) { _log.LogError(ex, "Hour ledger write failed for {Repo}", repo.RepoPath); }
+
             // One repo's bad tick must not cost the others their minute.
             try { Accrue(repo, now, toCredit); }
             catch (Exception ex) { _log.LogError(ex, "Accrual failed for {Repo}", repo.RepoPath); }

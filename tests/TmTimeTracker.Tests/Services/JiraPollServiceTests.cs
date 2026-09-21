@@ -39,18 +39,20 @@ public class JiraPollServiceTests
         new("SN-296", new IssueFields(
             new IssueStatus(status, new StatusCategory("indeterminate", "In Progress")), summary));
 
-    private static (JiraPollService Service, CapturingBus Bus) Build(
+    private static (JiraPollService Service, CapturingBus Bus, TicketSummaryRepository Summaries) Build(
         ISqliteConnectionFactory factory, Issue issue)
     {
         var api = new Mock<IJiraIssueSource>();
         api.Setup(a => a.GetIssueAsync("SN-296", It.IsAny<CancellationToken>())).ReturnsAsync(issue);
 
         var bus = new CapturingBus();
+        var summaries = new TicketSummaryRepository(factory);
         var service = new JiraPollService(
             new TicketTimeRepository(factory), api.Object, new ConfigRepository(factory),
-            bus, new FixedClock(), NullLogger<JiraPollService>.Instance, new PollServiceGate());
+            summaries, bus, new FixedClock(), NullLogger<JiraPollService>.Instance,
+            new PollServiceGate());
 
-        return (service, bus);
+        return (service, bus, summaries);
     }
 
     private static ISqliteConnectionFactory SeedCycle(int minutes, string lastSeenStatus)
@@ -71,7 +73,7 @@ public class JiraPollServiceTests
     public async Task Transition_event_carries_summary_and_tracked_minutes()
     {
         var factory = SeedCycle(minutes: 3, lastSeenStatus: "In Progress");
-        var (service, bus) = Build(factory, IssueWith("Review", "Fix Tolgee warning"));
+        var (service, bus, _) = Build(factory, IssueWith("Review", "Fix Tolgee warning"));
 
         await service.PollOnce("Review", CancellationToken.None);
 
@@ -87,7 +89,7 @@ public class JiraPollServiceTests
     public async Task Null_summary_is_carried_through_rather_than_failing()
     {
         var factory = SeedCycle(minutes: 1, lastSeenStatus: "In Progress");
-        var (service, bus) = Build(factory, IssueWith("Review", null));
+        var (service, bus, _) = Build(factory, IssueWith("Review", null));
 
         await service.PollOnce("Review", CancellationToken.None);
 
@@ -99,10 +101,52 @@ public class JiraPollServiceTests
     public async Task No_event_when_the_status_was_already_the_target()
     {
         var factory = SeedCycle(minutes: 5, lastSeenStatus: "Review");
-        var (service, bus) = Build(factory, IssueWith("Review", "Already there"));
+        var (service, bus, _) = Build(factory, IssueWith("Review", "Already there"));
 
         await service.PollOnce("Review", CancellationToken.None);
 
         bus.Published.OfType<JiraStatusTransition>().Should().BeEmpty();
+    }
+
+    // ---- the summary cache the weekly report reads ------------------------------------------
+
+    // The poll already asks Jira for fields=status,summary and threw the summary away. Caching it
+    // on every poll - not only on a transition - is what lets the report name a ticket with no
+    // network at all.
+    [Fact]
+    public async Task Caches_the_summary_of_every_polled_ticket()
+    {
+        var factory = SeedCycle(minutes: 5, lastSeenStatus: "In Progress");
+        var (service, _, summaries) = Build(factory, IssueWith("In Progress", "Fix Tolgee warning"));
+
+        await service.PollOnce("Review", CancellationToken.None);
+
+        summaries.GetMany(new[] { "SN-296" })["SN-296"].Should().Be("Fix Tolgee warning");
+    }
+
+    // A summary is edited in Jira between polls; the cache should follow it.
+    [Fact]
+    public async Task Refreshes_a_summary_that_changed_since_the_last_poll()
+    {
+        var factory = SeedCycle(minutes: 5, lastSeenStatus: "In Progress");
+        new TicketSummaryRepository(factory).Upsert("SN-296", "the old wording");
+        var (service, _, summaries) = Build(factory, IssueWith("In Progress", "the new wording"));
+
+        await service.PollOnce("Review", CancellationToken.None);
+
+        summaries.GetMany(new[] { "SN-296" })["SN-296"].Should().Be("the new wording");
+    }
+
+    // Jira can return an issue with no summary. That must not blow up a poll whose real job is
+    // keeping worklog cycles current.
+    [Fact]
+    public async Task Survives_an_issue_with_no_summary()
+    {
+        var factory = SeedCycle(minutes: 5, lastSeenStatus: "In Progress");
+        var (service, _, summaries) = Build(factory, IssueWith("In Progress", null));
+
+        await service.PollOnce("Review", CancellationToken.None);
+
+        summaries.GetMany(new[] { "SN-296" }).Should().BeEmpty();
     }
 }

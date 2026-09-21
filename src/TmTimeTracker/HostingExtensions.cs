@@ -21,6 +21,15 @@ public static class HostingExtensions
                 new SqliteConnectionFactory($"Data Source={AppPaths.DatabasePath}"));
             services.AddSingleton<DatabaseInitializer>();
             services.AddSingleton<TicketTimeRepository>();
+            // TimeAggregator writes the hour ledger on every tick, so it belongs to core rather
+            // than to the tray slice that reads it back for the weekly report.
+            services.AddSingleton<HourActivityRepository>();
+            // Filled by the Jira poll in daemon mode and read by the weekly report, so it sits in
+            // core rather than behind either slice.
+            services.AddSingleton<TicketSummaryRepository>();
+            // WindowsHost takes this by hand, and a CLI export would want it too, so it
+            // sits in core rather than in the tray slice that currently opens the window.
+            services.AddSingleton<WeeklyReportExporter>();
             services.AddSingleton<RememberEntryRepository>();
             services.AddSingleton<ConfigRepository>();
             services.AddSingleton<OAuthStateRepository>();

@@ -10,16 +10,17 @@ public sealed class JiraPollService : BackgroundService
     private readonly TicketTimeRepository _tickets;
     private readonly IJiraIssueSource _api;
     private readonly ConfigRepository _config;
+    private readonly TicketSummaryRepository _summaries;
     private readonly IEventBus _bus;
     private readonly IClock _clock;
     private readonly ILogger<JiraPollService> _log;
     private readonly PollServiceGate _gate;
 
     public JiraPollService(TicketTimeRepository tickets, IJiraIssueSource api,
-        ConfigRepository config, IEventBus bus, IClock clock, ILogger<JiraPollService> log,
-        PollServiceGate gate)
+        ConfigRepository config, TicketSummaryRepository summaries, IEventBus bus, IClock clock,
+        ILogger<JiraPollService> log, PollServiceGate gate)
     {
-        _tickets = tickets; _api = api; _config = config;
+        _tickets = tickets; _api = api; _config = config; _summaries = summaries;
         _bus = bus; _clock = clock; _log = log; _gate = gate;
     }
 
@@ -54,6 +55,12 @@ public sealed class JiraPollService : BackgroundService
                 var nowUtc = _clock.UtcNow;
                 var previous = cycle.LastSeenStatus;
                 _tickets.UpdateStatusSnapshot(cycle.Id, issue.Fields.Status.Name, nowUtc);
+
+                // The response already carries the summary, so caching it here is free and keeps
+                // the weekly report able to name a ticket without a network call. Before the
+                // early return below, so a ticket caches on its very first poll too.
+                if (issue.Fields.Summary is { } summary)
+                    _summaries.Upsert(cycle.TicketKey, summary);
 
                 if (previous is null) continue;
 

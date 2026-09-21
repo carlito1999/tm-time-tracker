@@ -21,10 +21,12 @@ public sealed class WindowsHost
     private readonly IProcessLiveness _liveness;
     private readonly TrackedRepoRepository _repos;
     private readonly JiraApiClient _api;
+    private readonly WeeklyReportExporter _exporter;
 
     private SetupWindow? _setup;
     private SettingsWindow? _settings;
     private DashboardWindow? _dashboard;
+    private ExportReportForm? _export;
     private SynchronizationContext? _uiCtx;
 
     public WindowsHost(
@@ -40,7 +42,8 @@ public sealed class WindowsHost
         IClaudeSessionProbe sessionProbe,
         IProcessLiveness liveness,
         TrackedRepoRepository repos,
-        JiraApiClient api)
+        JiraApiClient api,
+        WeeklyReportExporter exporter)
     {
         _sp = sp;
         _logFactory = logFactory;
@@ -55,6 +58,7 @@ public sealed class WindowsHost
         _liveness = liveness;
         _repos = repos;
         _api = api;
+        _exporter = exporter;
     }
 
     public void RegisterUiContext(SynchronizationContext uiCtx) => _uiCtx = uiCtx;
@@ -124,6 +128,21 @@ public sealed class WindowsHost
                 _dashboard.SettingsRequested += ShowSettings;
             }
             _dashboard.ShowAndSubscribe();
+        });
+    }
+
+    public void ShowExport()
+    {
+        Marshal(() =>
+        {
+            if (_export is null || _export.IsDisposed)
+            {
+                _export = new ExportReportForm(_exporter, _logFactory.CreateLogger<ExportReportForm>());
+                _export.FormClosed += (_, _) => _export = null;
+            }
+            _export.Show();
+            _export.BringToFront();
+            _export.Activate();
         });
     }
 

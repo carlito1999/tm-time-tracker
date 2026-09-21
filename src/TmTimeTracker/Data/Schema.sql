@@ -183,3 +183,35 @@ CREATE TABLE IF NOT EXISTS repo_branch (
 CREATE TABLE IF NOT EXISTS repo_estimation_disabled (
     repo_path TEXT PRIMARY KEY COLLATE NOCASE
 );
+
+-- The hour-resolved trail ticket_time cannot provide. ticket_time is a counter per (ticket,
+-- cycle) with no time axis and no repo, and a cycle can span weeks, so it cannot be cut at an
+-- hour or a week. TimeAggregator holds the repo->ticket map in memory on purpose, so the
+-- attribution has to be written down as it happens or it is lost at the next restart.
+--
+-- ticket_key is '' rather than NULL for minutes on a branch carrying no ticket: NULLs compare
+-- distinct in SQLite, which would defeat the upsert and grow a row per minute.
+--
+-- hour_start is LOCAL time without an offset, deliberately. This table exists to answer "what
+-- did Tuesday morning look like", which is a local-calendar question, and remember_entry stores
+-- local for the same reason. Do not "fix" it to UTC.
+CREATE TABLE IF NOT EXISTS hour_activity (
+    hour_start  TEXT    NOT NULL,
+    repo_path   TEXT    NOT NULL COLLATE NOCASE,
+    ticket_key  TEXT    NOT NULL DEFAULT '',
+    minutes     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (hour_start, repo_path, ticket_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hour_activity_range ON hour_activity(hour_start);
+
+-- Ticket summaries, cached so the weekly report can render "TM-47-2999: <name>" without going to
+-- Jira. JiraPollService already fetches summary on every poll (the issue request asks for
+-- fields=status,summary,...) and threw it away, so filling this costs no extra call. The report
+-- falls back to the bare key for a ticket with no row here, which is what tickets that closed
+-- before this cache existed will look like.
+CREATE TABLE IF NOT EXISTS ticket_summary (
+    ticket_key TEXT PRIMARY KEY,
+    summary    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

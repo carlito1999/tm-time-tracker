@@ -139,6 +139,7 @@ Right-click the TmTimeTracker icon (system tray, bottom-right; may be under the
 
 - **Open dashboard…** — main monitoring window
 - **Settings…** — re-opens the wizard for editing
+- **Export report…** — the weekly hour-by-hour spreadsheet (see below)
 - **Open log folder** — `%LOCALAPPDATA%\TmTimeTracker\logs\`
 - **Quit** — stops the daemon (won't restart until next Windows login, unless you
   launch the exe manually)
@@ -172,6 +173,39 @@ Auth ✓  ·  Last Jira poll: 14:42:00  ·  Next: in 47s
     description before posting.
   - **Discard** — marks the cycle submitted locally without posting to Jira
     (audit trail preserved with `worklog_id = "discarded:<guid>"`).
+
+### Weekly report
+
+**Tray → Export report…** opens a window that turns your tracked time into an
+hour-by-hour spreadsheet:
+
+| Date | Time | Repo | Ticket |
+|------|------|------|--------|
+| `21-09-26` | `08:00–09:00` | `sheeponline-new` | `SN-291-350: isolated-member studbooks` |
+| `21-09-26` | `09:00–10:00` | | |
+| `21-09-26` | `10:00–11:00` | `sheeponline-new / training-manager` | two tickets, one per line |
+
+Pick a date range and the hours of the day to lay down (defaults: Monday of this
+week through today, 08:00–17:00), name the file, and check the live preview
+before writing. Reports land in `Documents\TmTimeTracker\` and Explorer opens
+with the file selected.
+
+Notes:
+
+- **An hour with no tracked time keeps its row and leaves the cells blank**, so
+  the shape of the day survives and gaps stay visible.
+- A repo needs 5 minutes in an hour to appear, and a ticket needs 5 minutes of
+  its own. The floor is deliberately asymmetric: an hour split 4 + 4 across two
+  tickets of one repo still names the repo, because 8 minutes were spent there.
+- Concurrent work is real — `TimeAggregator` credits every active repo at once,
+  so a day can total more than the wall clock.
+- Minutes on a branch carrying no ticket count towards the repo but print no
+  ticket. Those same minutes reach Jira later under the next ticket branch, so
+  the spreadsheet and the worklog will disagree by design: the sheet shows when
+  the work happened, the worklog shows what it was eventually billed to.
+- History is kept for 90 days. `hour_activity` only fills while the daemon runs,
+  so it cannot reconstruct hours recorded before this feature existed.
+- A ticket with no cached summary renders as the bare key.
 
 ### Automatic worklog posting
 
@@ -371,7 +405,9 @@ Tables in `state.db`:
 | `oauth_app_config` | DPAPI-encrypted Client ID + Secret |
 | `oauth_state` | DPAPI-encrypted access + refresh tokens, cloud ID |
 | `config` | Idle threshold, poll interval, status names |
-| `minute_sample` | Per-minute audit trail (30 d retention) |
+| `hour_activity` | Minutes per (local hour, repo, ticket) — the weekly report's source (90 d retention) |
+| `ticket_summary` | Ticket key → Jira summary, cached by the poll so reports can name a ticket offline |
+| `minute_sample` | Legacy per-minute audit trail. Pruned at 30 d, but nothing writes to it — superseded by `hour_activity` |
 
 Open it with [DB Browser for SQLite](https://sqlitebrowser.org/) if you ever
 want to inspect or surgically edit anything.

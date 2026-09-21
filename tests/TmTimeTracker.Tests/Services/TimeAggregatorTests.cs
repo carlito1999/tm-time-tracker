@@ -40,16 +40,18 @@ public class TimeAggregatorTests
         }
     }
 
-    private static (TimeAggregator agg, FakeSource src, TicketTimeRepository tickets) Build()
+    private static (TimeAggregator agg, FakeSource src, TicketTimeRepository tickets,
+        HourActivityRepository hours) Build()
     {
         var ds = SharedSqlite.NewInMemory();
         new DatabaseInitializer(ds).EnsureCreated();
         var tickets = new TicketTimeRepository(ds);
+        var hours = new HourActivityRepository(ds);
         var src = new FakeSource();
-        var agg = new TimeAggregator(new EventBus(), src, tickets, new FakeClock(),
+        var agg = new TimeAggregator(new EventBus(), src, tickets, hours, new FakeClock(),
             NullLogger<TimeAggregator>.Instance);
         agg.ProcessEvent(new ActivityChanged(UserActivityState.Active, DateTime.UtcNow));
-        return (agg, src, tickets);
+        return (agg, src, tickets, hours);
     }
 
     private static RepoActivity On(string repo, string branch, string? ticket) =>
@@ -63,7 +65,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Increments_when_active_and_has_ticket()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "TM-29-x", "TM-29") };
 
         await agg.TickAsync();
@@ -76,7 +78,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Does_not_increment_when_idle()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         agg.ProcessEvent(new ActivityChanged(UserActivityState.Idle, DateTime.UtcNow));
         src.Next = new() { On(RepoA, "TM-29-x", "TM-29") };
 
@@ -89,7 +91,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Does_not_increment_when_no_ticket()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null) };
 
         await agg.TickAsync();
@@ -99,7 +101,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Switching_branch_opens_new_cycle_for_new_ticket()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
 
         src.Next = new() { On(RepoA, "feature/TM-29", "TM-29") };
         await agg.TickAsync();
@@ -116,7 +118,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Switching_back_resumes_existing_cycle()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
 
         src.Next = new() { On(RepoA, "TM-29-x", "TM-29") };
         await agg.TickAsync();
@@ -135,7 +137,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Carries_unattributed_time_onto_the_next_ticket_branch()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null) };
         for (var i = 0; i < 3; i++) await agg.TickAsync();
         tickets.GetAllOpen().Should().BeEmpty("nothing is written until a ticket is known");
@@ -151,7 +153,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Does_not_move_time_between_two_ticket_branches()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
 
         src.Next = new() { On(RepoA, "TM-101-a", "TM-101") };
         await agg.TickAsync();
@@ -169,7 +171,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Caps_the_carried_time()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null) };
         for (var i = 0; i < 45; i++) await agg.TickAsync();
 
@@ -182,7 +184,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Carries_the_buffer_only_once()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null) };
         for (var i = 0; i < 3; i++) await agg.TickAsync();
 
@@ -199,7 +201,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Does_not_buffer_idle_time_on_main()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         agg.ProcessEvent(new ActivityChanged(UserActivityState.Idle, DateTime.UtcNow));
         src.Next = new() { On(RepoA, "main", null) };
         for (var i = 0; i < 5; i++) await agg.TickAsync();
@@ -216,7 +218,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Credits_two_repos_in_the_same_minute()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "SN-299-x", "SN-299"), On(RepoB, "TM-30-y", "TM-30") };
 
         await agg.TickAsync();
@@ -229,7 +231,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Credits_a_ticket_once_even_if_two_repos_are_on_it()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "TM-30-x", "TM-30"), On(RepoB, "TM-30-y", "TM-30") };
 
         await agg.TickAsync();
@@ -242,7 +244,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Banked_time_never_carries_across_repos()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null) };
         for (var i = 0; i < 10; i++) await agg.TickAsync();
 
@@ -255,7 +257,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Banked_time_carries_within_its_own_repo_while_another_repo_is_active()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null), On(RepoB, "TM-30-y", "TM-30") };
         for (var i = 0; i < 5; i++) await agg.TickAsync();
 
@@ -271,7 +273,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Caps_each_repos_buffer_independently()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         src.Next = new() { On(RepoA, "main", null), On(RepoB, "develop", null) };
         for (var i = 0; i < 45; i++) await agg.TickAsync();
 
@@ -286,7 +288,7 @@ public class TimeAggregatorTests
     [Fact]
     public async Task Credits_a_Claude_repo_while_the_human_is_idle()
     {
-        var (agg, src, tickets) = Build();
+        var (agg, src, tickets, _) = Build();
         agg.ProcessEvent(new ActivityChanged(UserActivityState.Idle, DateTime.UtcNow));
         src.SuppressWhenIdle = false;   // the real monitor still returns Claude repos when idle
         src.Next = new() { On(RepoB, "TM-30-y", "TM-30") };
@@ -300,9 +302,9 @@ public class TimeAggregatorTests
     [Fact]
     public async Task A_throwing_source_costs_the_tick_but_not_the_process()
     {
-        var (agg, _, tickets) = Build();
+        var (_, _, tickets, hours) = Build();
         var boom = new ThrowingSource();
-        var agg2 = new TimeAggregator(new EventBus(), boom, tickets, new FakeClock(),
+        var agg2 = new TimeAggregator(new EventBus(), boom, tickets, hours, new FakeClock(),
             NullLogger<TimeAggregator>.Instance);
         agg2.ProcessEvent(new ActivityChanged(UserActivityState.Active, DateTime.UtcNow));
 
@@ -342,8 +344,8 @@ public class TimeAggregatorTests
         var tickets = new TicketTimeRepository(ds);
         var clock = new FakeClock();
         var src = new ThrowsOnceSource { Next = { On(RepoB, "TM-30-y", "TM-30") } };
-        var agg = new TimeAggregator(new EventBus(), src, tickets, clock,
-            NullLogger<TimeAggregator>.Instance);
+        var agg = new TimeAggregator(new EventBus(), src, tickets, new HourActivityRepository(ds),
+            clock, NullLogger<TimeAggregator>.Instance);
         agg.ProcessEvent(new ActivityChanged(UserActivityState.Active, DateTime.UtcNow));
         var cursorAtStart = clock.UtcNow;
 
@@ -356,5 +358,80 @@ public class TimeAggregatorTests
         src.LastSeenCursor.Should().Be(cursorAtStart,
             "the failed minute was never sampled, so its writes must still be in range");
         Minutes(tickets, "TM-30").Should().Be(1);
+    }
+
+    // ---- the hour ledger the weekly report reads ---------------------------------------------
+
+    // FakeClock pins LocalNow to a zero offset, so the hour these land in is 09:00 on any machine.
+    private static readonly DateTime LedgerHour = new(2026, 9, 3, 9, 0, 0);
+
+    private static IReadOnlyList<HourActivityRow> Ledger(HourActivityRepository h) =>
+        h.GetBetween(LedgerHour, LedgerHour.AddHours(1));
+
+    [Fact]
+    public async Task Records_the_credited_minute_in_the_hour_ledger()
+    {
+        var (agg, src, _, hours) = Build();
+        src.Next = new() { On(RepoA, "TM-29-x", "TM-29") };
+
+        await agg.TickAsync();
+
+        var row = Ledger(hours).Should().ContainSingle().Subject;
+        row.RepoPath.Should().Be(RepoA);
+        row.TicketKey.Should().Be("TM-29");
+        row.Minutes.Should().Be(1);
+    }
+
+    // The ledger records the raw sample, before attribution. A minute on main is banked in memory
+    // and reaches ticket_time only later under the next ticket, but the report has to show that
+    // the hour was spent in that repo - so this is the one place the two stores disagree.
+    [Fact]
+    public async Task Records_a_ticketless_minute_under_its_repo_though_no_ticket_is_billed()
+    {
+        var (agg, src, tickets, hours) = Build();
+        src.Next = new() { On(RepoA, "main", null) };
+
+        await agg.TickAsync();
+
+        tickets.GetAllOpen().Should().BeEmpty();
+        var row = Ledger(hours).Should().ContainSingle().Subject;
+        row.RepoPath.Should().Be(RepoA);
+        row.TicketKey.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Records_every_repo_of_a_concurrent_sample()
+    {
+        var (agg, src, _, hours) = Build();
+        src.Next = new() { On(RepoA, "TM-29-x", "TM-29"), On(RepoB, "SN-5-y", "SN-5") };
+
+        await agg.TickAsync();
+
+        Ledger(hours).Select(r => r.RepoPath).Should().BeEquivalentTo(RepoA, RepoB);
+    }
+
+    // An idle minute is not work, and the report must not invent one.
+    [Fact]
+    public async Task Records_nothing_while_the_human_is_idle()
+    {
+        var (agg, src, _, hours) = Build();
+        src.Next = new() { On(RepoA, "TM-29-x", "TM-29") };
+        agg.ProcessEvent(new ActivityChanged(UserActivityState.Idle, DateTime.UtcNow));
+
+        await agg.TickAsync();
+
+        Ledger(hours).Should().BeEmpty();
+    }
+
+    // Sixty ticks in one hour must read as sixty minutes, not one row overwritten sixty times.
+    [Fact]
+    public async Task Accumulates_successive_ticks_into_one_hour_row()
+    {
+        var (agg, src, _, hours) = Build();
+        src.Next = new() { On(RepoA, "TM-29-x", "TM-29") };
+
+        for (var i = 0; i < 5; i++) await agg.TickAsync();
+
+        Ledger(hours).Should().ContainSingle().Which.Minutes.Should().Be(5);
     }
 }
