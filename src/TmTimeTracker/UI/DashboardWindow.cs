@@ -22,6 +22,8 @@ public sealed class DashboardWindow : Form
     private readonly ConfigRepository _config;
     private readonly IClock _clock;
     private readonly IClaudeCodeActivityProbe _claudeProbe;
+    private readonly IClaudeSessionProbe _sessionProbe;
+    private readonly IProcessLiveness _liveness;
     private readonly TrackedRepoRepository _repos;
     private readonly JiraApiClient _api;
     private readonly ILogger<DashboardWindow> _log;
@@ -56,6 +58,8 @@ public sealed class DashboardWindow : Form
         ConfigRepository config,
         IClock clock,
         IClaudeCodeActivityProbe claudeProbe,
+        IClaudeSessionProbe sessionProbe,
+        IProcessLiveness liveness,
         TrackedRepoRepository repos,
         JiraApiClient api,
         ILogger<DashboardWindow> log)
@@ -67,6 +71,8 @@ public sealed class DashboardWindow : Form
         _config = config;
         _clock = clock;
         _claudeProbe = claudeProbe;
+        _sessionProbe = sessionProbe;
+        _liveness = liveness;
         _repos = repos;
         _api = api;
         _log = log;
@@ -420,16 +426,22 @@ public sealed class DashboardWindow : Form
     /// <summary>
     /// Counts every tracked repo Claude is working in, not just the focused one - sessions run in
     /// parallel now, and a badge that only watched the foreground repo read "idle" while an agent
-    /// was busy next door. The 60s window is a display heuristic for a UI that repaints on its own
-    /// timer; it is unrelated to how the aggregator counts minutes.
+    /// was busy next door.
+    ///
+    /// Deliberately the same rule the aggregator bills on, through <see cref="ClaudeRepoActivity"/>.
+    /// While the two decided separately this badge read "Claude idle" for the whole of any tool
+    /// call longer than a minute, which is exactly when it mattered most. The 60s window applies
+    /// only to the transcript half, which is silent for the length of a tool call; a session
+    /// latched to "busy" holds the badge for as long as that session actually runs.
     /// </summary>
     private void UpdateClaudeBadge()
     {
-        var snap = _claudeProbe.Snapshot();
+        var repos = _repos.GetAll();
+        var writes = _claudeProbe.Snapshot();
+        var busy = ClaudeSessionActivity.BusyRepos(
+            _sessionProbe.Snapshot(), repos.Select(r => r.Path), _liveness.IsRunning);
         var cutoff = DateTime.UtcNow - TimeSpan.FromSeconds(60);
-        var active = _repos.GetAll()
-            .Count(r => snap.TryGetValue(ClaudeProjectSlug.FromPath(r.Path), out var mtime)
-                        && mtime > cutoff);
+        var active = repos.Count(r => ClaudeRepoActivity.IsActive(r.Path, writes, busy, cutoff));
 
         _claudePill.Set(
             active switch

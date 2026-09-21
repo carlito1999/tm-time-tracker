@@ -139,6 +139,7 @@ Right-click the TmTimeTracker icon (system tray, bottom-right; may be under the
 
 - **Open dashboard…** — main monitoring window
 - **Settings…** — re-opens the wizard for editing
+- **Export report…** — the weekly hour-by-hour spreadsheet (see below)
 - **Open log folder** — `%LOCALAPPDATA%\TmTimeTracker\logs\`
 - **Quit** — stops the daemon (won't restart until next Windows login, unless you
   launch the exe manually)
@@ -172,6 +173,39 @@ Auth ✓  ·  Last Jira poll: 14:42:00  ·  Next: in 47s
     description before posting.
   - **Discard** — marks the cycle submitted locally without posting to Jira
     (audit trail preserved with `worklog_id = "discarded:<guid>"`).
+
+### Weekly report
+
+**Tray → Export report…** opens a window that turns your tracked time into an
+hour-by-hour spreadsheet:
+
+| Date | Time | Repo | Ticket |
+|------|------|------|--------|
+| `21-09-26` | `08:00–09:00` | `sheeponline-new` | `SN-291-350: isolated-member studbooks` |
+| `21-09-26` | `09:00–10:00` | | |
+| `21-09-26` | `10:00–11:00` | `sheeponline-new / training-manager` | two tickets, one per line |
+
+Pick a date range and the hours of the day to lay down (defaults: Monday of this
+week through today, 08:00–17:00), name the file, and check the live preview
+before writing. Reports land in `Documents\TmTimeTracker\` and Explorer opens
+with the file selected.
+
+Notes:
+
+- **An hour with no tracked time keeps its row and leaves the cells blank**, so
+  the shape of the day survives and gaps stay visible.
+- A repo needs 5 minutes in an hour to appear, and a ticket needs 5 minutes of
+  its own. The floor is deliberately asymmetric: an hour split 4 + 4 across two
+  tickets of one repo still names the repo, because 8 minutes were spent there.
+- Concurrent work is real — `TimeAggregator` credits every active repo at once,
+  so a day can total more than the wall clock.
+- Minutes on a branch carrying no ticket count towards the repo but print no
+  ticket. Those same minutes reach Jira later under the next ticket branch, so
+  the spreadsheet and the worklog will disagree by design: the sheet shows when
+  the work happened, the worklog shows what it was eventually billed to.
+- History is kept for 90 days. `hour_activity` only fills while the daemon runs,
+  so it cannot reconstruct hours recorded before this feature existed.
+- A ticket with no cached summary renders as the bare key.
 
 ### Automatic worklog posting
 
@@ -260,11 +294,15 @@ The three `PR_*` variables need two things, neither of which is a new credential
 Check it end to end with:
 
 ```powershell
-dotnet run --project src\TmTimeTracker -- --probe-devstatus <numeric issue id>
+dotnet run --project src\TmTimeTracker -- --probe-pr <numeric issue id> <ticket key>
 ```
 
-A `200` means pull-request data is reachable; `401 "scope does not match"` means
-the scope is missing or the app has not been reauthorised since it was added.
+It prints the pull request the announcement would link to. Bitbucket is asked
+first and Jira's dev-status only as a fallback, so the log line shows which one
+answered: a `200` from `api.bitbucket.org` is the healthy path, while falling
+through to dev-status means the Bitbucket token is missing or the repo's git
+remote is not on Bitbucket. A `401 "scope does not match"` from dev-status means
+the Jira scope is missing or the app has not been reauthorised since it was added.
 
 ### How announcing works
 
@@ -274,14 +312,28 @@ to a restart:
 1. Any tracked ticket sitting in the review status is queued — both from the
    transition event and by a sweep every 30s, so a missed event or a restart
    mid-wait recovers on its own.
-2. A queued ticket that has not been announced is polled until Jira reports its
-   pull request. Nothing is posted with a literal `{PR_URL}` in it.
+2. A queued ticket that has not been announced is polled until its pull request is
+   found. Nothing is posted with a literal `{PR_URL}` in it.
 3. When the pull request appears, the message is posted and the ticket is marked
    announced — it can never be announced twice.
-4. If **10 minutes pass since the branch's last commit** and Jira still reports no
-   pull request, an **urgent Windows notification** tells you to announce it
+
+   The one picked is the **newest pull request whose branch or title carries the
+   ticket key**, preferring an open one, ranked by **pull request id** rather than
+   by when it was last updated. Ids only ever go up, so a branch that has been
+   re-PR'd against successive `main-DD-MM-YYYY` snapshots always resolves to the
+   latest — and a comment on a superseded one cannot drag it back to the top.
+   Pull requests belonging to other tickets are ignored outright; Jira's
+   dev-status files them under the wrong issue often enough to matter.
+4. If **10 minutes pass since the branch's last commit** and no pull request is
+   reported, an **urgent Windows notification** tells you to announce it
    yourself. Once per ticket, not every poll. Polling continues in case it turns
    up later.
+5. If the only pull request on offer **has not changed since more than 4 hours
+   before the ticket moved to review**, it is treated as a source that has not
+   caught up rather than as an answer, and nothing is posted. After **10 minutes**
+   of that, the same urgent notification hands the job to you — and this one
+   stops the daemon announcing the ticket at all, so it cannot duplicate a message
+   you posted by hand. Moving the ticket out of review and back clears it.
 
    Urgent means the toast is allowed to break through Do Not Disturb. Windows asks
    you to permit that the first time one arrives; until you do, it behaves like an
@@ -353,7 +405,9 @@ Tables in `state.db`:
 | `oauth_app_config` | DPAPI-encrypted Client ID + Secret |
 | `oauth_state` | DPAPI-encrypted access + refresh tokens, cloud ID |
 | `config` | Idle threshold, poll interval, status names |
-| `minute_sample` | Per-minute audit trail (30 d retention) |
+| `hour_activity` | Minutes per (local hour, repo, ticket) — the weekly report's source (90 d retention) |
+| `ticket_summary` | Ticket key → Jira summary, cached by the poll so reports can name a ticket offline |
+| `minute_sample` | Legacy per-minute audit trail. Pruned at 30 d, but nothing writes to it — superseded by `hour_activity` |
 
 Open it with [DB Browser for SQLite](https://sqlitebrowser.org/) if you ever
 want to inspect or surgically edit anything.

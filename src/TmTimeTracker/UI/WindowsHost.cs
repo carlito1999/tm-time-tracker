@@ -17,12 +17,16 @@ public sealed class WindowsHost
     private readonly ConfigRepository _config;
     private readonly IClock _clock;
     private readonly IClaudeCodeActivityProbe _claudeProbe;
+    private readonly IClaudeSessionProbe _sessionProbe;
+    private readonly IProcessLiveness _liveness;
     private readonly TrackedRepoRepository _repos;
     private readonly JiraApiClient _api;
+    private readonly WeeklyReportExporter _exporter;
 
     private SetupWindow? _setup;
     private SettingsWindow? _settings;
     private DashboardWindow? _dashboard;
+    private ExportReportForm? _export;
     private SynchronizationContext? _uiCtx;
 
     public WindowsHost(
@@ -35,8 +39,11 @@ public sealed class WindowsHost
         ConfigRepository config,
         IClock clock,
         IClaudeCodeActivityProbe claudeProbe,
+        IClaudeSessionProbe sessionProbe,
+        IProcessLiveness liveness,
         TrackedRepoRepository repos,
-        JiraApiClient api)
+        JiraApiClient api,
+        WeeklyReportExporter exporter)
     {
         _sp = sp;
         _logFactory = logFactory;
@@ -47,8 +54,11 @@ public sealed class WindowsHost
         _config = config;
         _clock = clock;
         _claudeProbe = claudeProbe;
+        _sessionProbe = sessionProbe;
+        _liveness = liveness;
         _repos = repos;
         _api = api;
+        _exporter = exporter;
     }
 
     public void RegisterUiContext(SynchronizationContext uiCtx) => _uiCtx = uiCtx;
@@ -112,12 +122,27 @@ public sealed class WindowsHost
             {
                 _dashboard = new DashboardWindow(
                     _bus, _tickets, _oauthState, _entries, _config,
-                    _clock, _claudeProbe, _repos, _api,
+                    _clock, _claudeProbe, _sessionProbe, _liveness, _repos, _api,
                     _logFactory.CreateLogger<DashboardWindow>());
                 // Subscribed once at construction, not per Show, or the handler would stack up.
                 _dashboard.SettingsRequested += ShowSettings;
             }
             _dashboard.ShowAndSubscribe();
+        });
+    }
+
+    public void ShowExport()
+    {
+        Marshal(() =>
+        {
+            if (_export is null || _export.IsDisposed)
+            {
+                _export = new ExportReportForm(_exporter, _logFactory.CreateLogger<ExportReportForm>());
+                _export.FormClosed += (_, _) => _export = null;
+            }
+            _export.Show();
+            _export.BringToFront();
+            _export.Activate();
         });
     }
 

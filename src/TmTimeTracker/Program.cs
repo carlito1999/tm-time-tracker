@@ -31,12 +31,16 @@ AppPaths.EnsureExists();
 
 if (args.Length >= 1 && args[0] == "--login")     { await RunCli(b => b, RunLogin); return; }
 if (args.Length == 2 && args[0] == "--probe-jira"){ await RunCli(b => b, h => RunProbe(h, args[1])); return; }
-if (args.Length == 2 && args[0] == "--probe-devstatus")
-    { await RunCli(b => b, h => RunDevStatusProbe(h, args[1])); return; }
+if (args.Length == 3 && args[0] == "--probe-pr")
+    { await RunCli(b => b, h => RunPullRequestProbe(h, args[1], args[2])); return; }
 if (args.Length == 3 && args[0] == "--set-jira-token")
     { await RunCli(b => b, h => SetJiraToken(h, args[1], args[2])); return; }
 if (args.Length == 3 && args[0] == "--set-bitbucket-token")
     { await RunCli(b => b, h => SetBitbucketToken(h, args[1], args[2])); return; }
+// Two arguments, not three: GitLab authenticates with the token alone, and the username is read
+// back from the API rather than typed.
+if (args.Length == 2 && args[0] == "--set-gitlab-token")
+    { await RunCli(b => b, h => SetGitLabToken(h, args[1])); return; }
 // The overdue warning cannot fire until the read:dev-info:jira scope is granted, so this is the
 // only way to see a real toast come out of the published exe.
 if (args.Length == 1 && args[0] == "--test-toast")
@@ -113,6 +117,7 @@ static async Task RunDaemon()
             .AddPollGate()
             .AddPollServices()
             .AddSlackServices()
+            .AddClaudeServices()
             .AddTrayUI()
             .Build();
 
@@ -232,8 +237,40 @@ static async Task SetBitbucketToken(IHost host, string email, string token)
     await Task.CompletedTask;
 }
 
-// Exercises the same client the worker uses, so a green probe means the worker will work too.
-static async Task RunDevStatusProbe(IHost host, string issueId)
+// Probes before storing, because the failure this exists to catch is a token with the wrong
+// scope: a git-access credential reaches GitLab and is refused only at /api/v4, so storing an
+// unchecked token would look like success and fail silently on the first ticket.
+static async Task SetGitLabToken(IHost host, string token)
+{
+    using var http = host.Services.GetRequiredService<IHttpClientFactory>().CreateClient();
+    using var request = new HttpRequestMessage(HttpMethod.Get, "https://gitlab.com/api/v4/user");
+    request.Headers.Add("PRIVATE-TOKEN", token);
+
+    using var response = await http.SendAsync(request);
+    var body = await response.Content.ReadAsStringAsync();
+
+    if (!response.IsSuccessStatusCode)
+    {
+        Console.Error.WriteLine($"GitLab refused the token: {(int)response.StatusCode} {body}");
+        Console.Error.WriteLine("It needs a Personal Access Token carrying read_api. Create one at");
+        Console.Error.WriteLine("  https://gitlab.com/-/user_settings/personal_access_tokens");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    using var doc = System.Text.Json.JsonDocument.Parse(body);
+    var username = doc.RootElement.TryGetProperty("username", out var u)
+        ? u.GetString()
+        : null;
+    if (string.IsNullOrWhiteSpace(username)) username = "gitlab";
+
+    host.Services.GetRequiredService<GitLabApiTokenRepository>().Save(username, token);
+    Console.WriteLine($"Stored GitLab API token for {username} (DPAPI-encrypted).");
+}
+
+// Exercises the same source the worker uses - Bitbucket first, Jira's dev-status only as the
+// fallback - so a green probe means the worker will work too.
+static async Task RunPullRequestProbe(IHost host, string issueId, string ticketKey)
 {
     var credential = host.Services.GetRequiredService<JiraApiTokenRepository>().Get();
     if (credential is null)
@@ -248,7 +285,7 @@ static async Task RunDevStatusProbe(IHost host, string issueId)
     Console.WriteLine($"Using basic auth as {credential.Email}.");
 
     var snapshot = await host.Services.GetRequiredService<IPullRequestSource>()
-        .GetSnapshotAsync(issueId, CancellationToken.None);
+        .GetSnapshotAsync(issueId, ticketKey, CancellationToken.None);
 
     var lastCommit = snapshot.LastCommitUtc?.ToString("u") ?? "(none)";
     Console.WriteLine($"last commit: {lastCommit}");

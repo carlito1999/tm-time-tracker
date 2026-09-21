@@ -108,3 +108,27 @@ entered into the setup wizard on first run (no `secrets.json` file needed).
 - [ ] On startup, `secrets.json` is renamed to `secrets.json.migrated`.
 - [ ] Setup wizard opens at page 2 (Connect) because Client ID/Secret are
       already populated. Complete sign-in. Done.
+
+## 12. Weekly report export
+
+- [ ] Let the daemon run while you work in a tracked repo for a few minutes, then
+      check the ledger filled:
+      `sqlite3 %LOCALAPPDATA%\TmTimeTracker\state.db "select * from hour_activity;"`
+      → rows land in the correct **local** hour with the correct repo path.
+- [ ] Tray → **Export report…** — the window opens with From set to Monday of
+      this week, To set to today, and hours 08–17.
+- [ ] The preview lists one row per hour, with untracked hours blank and a blank
+      spacer row between days.
+- [ ] Change the From date, the To date and the hour spinners — the preview
+      refreshes on each change.
+- [ ] Press **Export**. Explorer opens with the file selected in
+      `Documents\TmTimeTracker\`.
+- [ ] **Open the file in real Excel** (not only LibreOffice). It must open with
+      **no repair prompt**, and keep: bold filled header, tinted Date/Time/Repo
+      columns, wrapped Ticket column with several tickets on separate lines.
+- [ ] Clear the file name box and export again → the file is named
+      `TmTimeTracker-week-<yyyy-MM-dd>.xlsx`.
+- [ ] Type a name without an extension → `.xlsx` is appended.
+- [ ] Pick a range with no tracked time → the status line reads
+      "Nothing in this range" or shows blank rows, and export still writes a
+      readable file.

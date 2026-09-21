@@ -21,6 +21,15 @@ public static class HostingExtensions
                 new SqliteConnectionFactory($"Data Source={AppPaths.DatabasePath}"));
             services.AddSingleton<DatabaseInitializer>();
             services.AddSingleton<TicketTimeRepository>();
+            // TimeAggregator writes the hour ledger on every tick, so it belongs to core rather
+            // than to the tray slice that reads it back for the weekly report.
+            services.AddSingleton<HourActivityRepository>();
+            // Filled by the Jira poll in daemon mode and read by the weekly report, so it sits in
+            // core rather than behind either slice.
+            services.AddSingleton<TicketSummaryRepository>();
+            // WindowsHost takes this by hand, and a CLI export would want it too, so it
+            // sits in core rather than in the tray slice that currently opens the window.
+            services.AddSingleton<WeeklyReportExporter>();
             services.AddSingleton<RememberEntryRepository>();
             services.AddSingleton<ConfigRepository>();
             services.AddSingleton<OAuthStateRepository>();
@@ -29,8 +38,15 @@ public static class HostingExtensions
             services.AddSingleton<SlackChannelRepository>();
             services.AddSingleton<JiraSiteRepository>();
             services.AddSingleton<PrAnnouncementRepository>();
+            // Announcements need this to turn a ticket key into a Bitbucket repository, so it
+            // cannot stay behind AddClaudeServices, which the CLI modes deliberately leave out.
+            services.AddSingleton<RepoProjectRepository>();
+            // The Repositories tab reads and writes this in every mode, not only when the
+            // estimation worker is registered.
+            services.AddSingleton<RepoEstimationRepository>();
             services.AddSingleton<JiraApiTokenRepository>();
             services.AddSingleton<BitbucketApiTokenRepository>();
+            services.AddSingleton<GitLabApiTokenRepository>();
             // The balloon is only the fallback now, live once the tray icon attaches; a no-op in
             // the headless CLI modes. Toasts work in every mode, tray icon or not.
             services.AddSingleton<TmTimeTracker.UI.TrayBalloonNotifier>();
@@ -41,8 +57,11 @@ public static class HostingExtensions
             services.AddSingleton<IEventBus, EventBus>();
             services.AddSingleton<IIdleProbe, Win32IdleProbe>();
             services.AddSingleton<IGitBranchProbe, GitBranchProbe>();
+            services.AddSingleton<IGitRemoteProbe, GitRemoteProbe>();
             services.AddSingleton<IForegroundWindowProbe, Win32ForegroundWindowProbe>();
             services.AddSingleton<IClaudeCodeActivityProbe, FileClaudeCodeActivityProbe>();
+            services.AddSingleton<IClaudeSessionProbe, FileClaudeSessionProbe>();
+            services.AddSingleton<IProcessLiveness, Win32ProcessLiveness>();
             services.AddSingleton<ActiveRepoResolver>();
             services.AddSingleton<RepoActivityMonitor>();
             services.AddSingleton<IRepoActivitySource>(
@@ -108,6 +127,10 @@ public static class HostingExtensions
                 return new JiraApiClient(http, tokens, log);
             });
             services.AddSingleton<IJiraIssueSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraSearchSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraEstimateWriter>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraProjectSource>(sp => sp.GetRequiredService<JiraApiClient>());
+            services.AddSingleton<IJiraAttachmentSource>(sp => sp.GetRequiredService<JiraApiClient>());
             services.AddSingleton<IAccessibleSiteSource>(sp => sp.GetRequiredService<OAuthCoordinator>());
             services.AddSingleton<IJiraSiteResolver>(sp => new JiraSiteResolver(
                 sp.GetRequiredService<JiraSiteRepository>(),
@@ -122,9 +145,20 @@ public static class HostingExtensions
                 sp.GetRequiredService<JiraApiTokenRepository>(),
                 sp.GetRequiredService<IJiraSiteResolver>(),
                 sp.GetRequiredService<ILogger<BasicAuthDevStatusClient>>()));
-            services.AddSingleton<IPullRequestSource>(sp => new JiraPullRequestSource(
+            services.AddSingleton<JiraPullRequestSource>(sp => new JiraPullRequestSource(
                 sp.GetRequiredService<IDevStatusSource>(),
                 sp.GetRequiredService<ILogger<JiraPullRequestSource>>()));
+            services.AddSingleton<TmTimeTracker.Bitbucket.IBitbucketPullRequestSource>(
+                sp => new TmTimeTracker.Bitbucket.BitbucketApiClient(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("bitbucket-api"),
+                    sp.GetRequiredService<BitbucketApiTokenRepository>(),
+                    sp.GetRequiredService<ILogger<TmTimeTracker.Bitbucket.BitbucketApiClient>>()));
+            services.AddSingleton<TmTimeTracker.Bitbucket.BitbucketRepoResolver>();
+            services.AddSingleton<IPullRequestSource>(sp => new BitbucketPullRequestSource(
+                sp.GetRequiredService<TmTimeTracker.Bitbucket.IBitbucketPullRequestSource>(),
+                sp.GetRequiredService<TmTimeTracker.Bitbucket.BitbucketRepoResolver>(),
+                sp.GetRequiredService<JiraPullRequestSource>(),
+                sp.GetRequiredService<ILogger<BitbucketPullRequestSource>>()));
             services.AddSingleton<LocalCallbackListener>();
         });
         return builder;
@@ -149,6 +183,34 @@ public static class HostingExtensions
             services.AddSingleton<ISlackPoster>(sp => sp.GetRequiredService<SlackApiClient>());
 
             services.AddHostedService<PrAnnouncementWorker>();
+        });
+        return builder;
+    }
+
+    /// <summary>
+    /// Claude-powered estimation of To-Do tickets. Registered separately from the poll services
+    /// because it is the only feature that spawns a child process and spends money, so it can be
+    /// left out of the CLI modes.
+    /// </summary>
+    public static IHostBuilder AddClaudeServices(this IHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<ClaudeAuthRepository>();
+            services.AddSingleton<RepoBranchRepository>();
+            services.AddSingleton<TicketEstimateRepository>();
+            services.AddSingleton(new ClaudeEstimatorOptions());
+            services.AddSingleton<IClaudeEstimator, ClaudeCliEstimator>();
+            services.AddSingleton<IGitWorktreeManager>(sp =>
+                new GitWorktreeManager(sp.GetRequiredService<ILogger<GitWorktreeManager>>()));
+            services.AddSingleton<TicketAttachmentFetcher>();
+            // Only the estimator reads linked issues, so this stays behind AddClaudeServices.
+            services.AddSingleton<TmTimeTracker.GitLab.IGitLabIssueSource>(
+                sp => new TmTimeTracker.GitLab.GitLabApiClient(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("gitlab-api"),
+                    sp.GetRequiredService<GitLabApiTokenRepository>(),
+                    sp.GetRequiredService<ILogger<TmTimeTracker.GitLab.GitLabApiClient>>()));
+            services.AddHostedService<TicketEstimationWorker>();
         });
         return builder;
     }

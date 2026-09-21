@@ -43,6 +43,30 @@ public class RepoActivityMonitorTests : IDisposable
             Throws ? throw new IOException("probe exploded") : Snapshot;
     }
 
+    private sealed class FakeSessions : IClaudeSessionProbe
+    {
+        public List<ClaudeSession> Items { get; } = new();
+        public bool Throws { get; set; }
+        public IReadOnlyList<ClaudeSession> Snapshot() =>
+            Throws ? throw new IOException("session probe exploded") : Items;
+    }
+
+    private sealed class FakeLiveness : IProcessLiveness
+    {
+        public HashSet<int> AlivePids { get; } = new();
+        public bool IsRunning(ClaudeSession session) => AlivePids.Contains(session.Pid);
+    }
+
+    private readonly FakeSessions _sessions = new();
+    private readonly FakeLiveness _liveness = new();
+
+    /// <summary>A busy session Claude Code would have written for <paramref name="repoPath"/>.</summary>
+    private void BusySessionIn(string repoPath, int pid = 4242, bool alive = true)
+    {
+        _sessions.Items.Add(new ClaudeSession(pid, repoPath, "busy", 1));
+        if (alive) _liveness.AlivePids.Add(pid);
+    }
+
     private sealed class FakeClock : IClock
     {
         public DateTime UtcNow { get; set; } = new(2026, 9, 3, 12, 0, 0, DateTimeKind.Utc);
@@ -76,7 +100,7 @@ public class RepoActivityMonitorTests : IDisposable
         var clk = new FakeClock();
         var resolver = new ActiveRepoResolver(repos, fg, git, clk,
             NullLogger<ActiveRepoResolver>.Instance);
-        var mon = new RepoActivityMonitor(repos, resolver, claude, git,
+        var mon = new RepoActivityMonitor(repos, resolver, claude, _sessions, _liveness, git,
             NullLogger<RepoActivityMonitor>.Instance);
         return (mon, fg, claude, git, clk);
     }
@@ -195,5 +219,84 @@ public class RepoActivityMonitorTests : IDisposable
         var sample = mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: true);
 
         sample.Should().ContainSingle().Which.TicketKey.Should().Be("SN-299");
+    }
+
+    [Fact]
+    public void A_busy_Claude_session_earns_a_minute_with_no_transcript_write_at_all()
+    {
+        // The reported bug. Inside a long tool call Claude Code appends nothing to the
+        // transcript, so the mtime rule sees an idle repo and a ten-minute test run bills zero.
+        var b = MakeRepo("sheepsonline");
+        var (mon, _, _, git, clk) = Build(b);
+        git.ByPath[b] = "SN-279-x";
+        BusySessionIn(b);
+
+        var sample = mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: false);
+
+        sample.Should().ContainSingle().Which.TicketKey.Should().Be("SN-279");
+    }
+
+    [Fact]
+    public void A_busy_session_keeps_earning_however_stale_the_transcript_is()
+    {
+        // There is no time cap: the repo earns until Claude says it stopped.
+        var b = MakeRepo("sheepsonline");
+        var (mon, _, claude, git, clk) = Build(b);
+        git.ByPath[b] = "SN-279-x";
+        claude.Snapshot[ClaudeProjectSlug.FromPath(b)] = clk.UtcNow.AddHours(-3);
+        BusySessionIn(b);
+
+        mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: false).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void A_busy_session_whose_process_is_gone_earns_nothing()
+    {
+        // Closing VS Code mid-tool-call leaves status latched at "busy" forever. Process death
+        // is the only thing that ends that run, so it has to be checked.
+        var b = MakeRepo("sheepsonline");
+        var (mon, _, _, git, clk) = Build(b);
+        git.ByPath[b] = "SN-279-x";
+        BusySessionIn(b, alive: false);
+
+        mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: false).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_idle_session_earns_nothing()
+    {
+        var b = MakeRepo("sheepsonline");
+        var (mon, _, _, git, clk) = Build(b);
+        git.ByPath[b] = "SN-279-x";
+        _sessions.Items.Add(new ClaudeSession(7, b, "idle", 1));
+        _liveness.AlivePids.Add(7);
+
+        mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: false).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_busy_session_in_the_focused_repo_does_not_book_it_twice()
+    {
+        // One repo, one ticket, one minute - whether the human, Claude, or both are working it.
+        var a = MakeRepo("sheepsonline");
+        var (mon, fg, _, git, clk) = Build(a);
+        git.ByPath[a] = "SN-279-x";
+        fg.Value = VsCodeOn("sheepsonline");
+        BusySessionIn(a);
+
+        mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: true)
+            .Should().ContainSingle().Which.RepoPath.Should().Be(a);
+    }
+
+    [Fact]
+    public void A_failing_session_probe_falls_back_to_the_transcript_rule()
+    {
+        var b = MakeRepo("sheepsonline");
+        var (mon, _, claude, git, clk) = Build(b);
+        git.ByPath[b] = "SN-279-x";
+        claude.Snapshot[ClaudeProjectSlug.FromPath(b)] = clk.UtcNow;
+        _sessions.Throws = true;
+
+        mon.Sample(clk.UtcNow.AddMinutes(-1), humanActive: false).Should().ContainSingle();
     }
 }

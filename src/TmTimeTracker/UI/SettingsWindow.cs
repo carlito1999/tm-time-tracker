@@ -127,7 +127,24 @@ public sealed class SettingsWindow : Form
                 toast.ForeColor = Theme.Danger;
             }
         };
-        return WrapWithSaveBar(page, save, toast);
+        // The tab carries two independent credentials: the Atlassian OAuth app above, and
+        // Claude below. They save separately, so each keeps its own controls.
+        var atlassian = WrapWithSaveBar(page, save, toast);
+
+        var split = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            BackColor = Theme.Background
+        };
+        split.RowStyles.Add(new RowStyle(SizeType.Absolute, 340));
+        split.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+        split.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        split.Controls.Add(atlassian, 0, 0);
+        split.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Theme.Border }, 0, 1);
+        split.Controls.Add(new ClaudeAuthPage(_sp, _log), 0, 2);
+        return split;
     }
 
     private Control BuildRepositoriesTab()

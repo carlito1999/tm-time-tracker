@@ -72,6 +72,7 @@ public sealed class TrayIconHost : BackgroundService
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open dashboard…", null, (_, _) => host.ShowDashboard());
         menu.Items.Add("Settings…", null, (_, _) => host.ShowSettings());
+        menu.Items.Add("Export report…", null, (_, _) => host.ShowExport());
         menu.Items.Add("Open log folder", null, (_, _) =>
             System.Diagnostics.Process.Start("explorer.exe", Configuration.AppPaths.LogsDir));
         menu.Items.Add(new ToolStripSeparator());

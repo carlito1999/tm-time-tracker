@@ -22,10 +22,40 @@ public sealed record StatusCategory(
     [property: JsonPropertyName("key")] string Key,
     [property: JsonPropertyName("name")] string Name);
 
-// Summary is optional with a default so existing construction sites keep compiling.
+// Optional members carry defaults and stay last so existing construction sites keep compiling.
+// Description is a JsonElement because Jira v3 returns Atlassian Document Format - a nested
+// tree, not a string. Flatten it with AdfText.
 public sealed record IssueFields(
     [property: JsonPropertyName("status")] IssueStatus Status,
-    [property: JsonPropertyName("summary")] string? Summary = null);
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("timetracking")] JiraTimeTracking? TimeTracking = null,
+    [property: JsonPropertyName("description")] System.Text.Json.JsonElement? Description = null,
+    [property: JsonPropertyName("attachment")] JiraAttachment[]? Attachments = null);
+
+/// <summary>
+/// A file on the issue. Tickets here are often nothing but a screenshot - the description ADF
+/// carries a media node with no text at all - so the attachments are the only place the actual
+/// content lives.
+/// </summary>
+public sealed record JiraAttachment(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("filename")] string Filename,
+    [property: JsonPropertyName("mimeType")] string? MimeType,
+    [property: JsonPropertyName("size")] long Size,
+    [property: JsonPropertyName("content")] string? Content)
+{
+    public bool IsImage =>
+        MimeType is not null &&
+        MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+}
+
+// originalEstimateSeconds is the field gate 4 compares against: Jira accepts a write expressed
+// in its own duration syntax but reports the stored value back in seconds.
+public sealed record JiraTimeTracking(
+    [property: JsonPropertyName("originalEstimateSeconds")] int? OriginalEstimateSeconds);
+
+public sealed record JiraSearchResponse(
+    [property: JsonPropertyName("issues")] Issue[]? Issues);
 
 public sealed record JiraProject(
     [property: JsonPropertyName("key")] string Key,
@@ -65,7 +95,15 @@ public sealed record DevStatusPullRequest(
     [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("url")] string? Url,
     [property: JsonPropertyName("repositoryName")] string? RepositoryName,
-    [property: JsonPropertyName("lastUpdate")] string? LastUpdate);
+    [property: JsonPropertyName("lastUpdate")] string? LastUpdate,
+    [property: JsonPropertyName("source")] DevStatusPullRequestRef? Source = null);
+
+/// <summary>
+/// The branch a pull request was opened from. dev-status has always sent this; it went unread
+/// until the selector needed it to tell one ticket's pull requests from another's.
+/// </summary>
+public sealed record DevStatusPullRequestRef(
+    [property: JsonPropertyName("branch")] string? Branch);
 
 public sealed record WorklogRequest(
     [property: JsonPropertyName("timeSpentSeconds")] int TimeSpentSeconds,
