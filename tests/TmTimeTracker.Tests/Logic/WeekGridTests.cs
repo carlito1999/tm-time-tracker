@@ -19,9 +19,10 @@ public class WeekGridTests
     private static IReadOnlyList<GridRow> Build(
         IEnumerable<HourActivityRow> rows, DateTime from, DateTime to,
         int startHour = 8, int endHour = 10,
-        IReadOnlyDictionary<string, string>? summaries = null) =>
+        IReadOnlyDictionary<string, string>? summaries = null,
+        int minimumMinutes = WeekGrid.DefaultMinimumMinutes) =>
         WeekGrid.Build(rows.ToList(), from, to, startHour, endHour,
-            summaries ?? new Dictionary<string, string>());
+            summaries ?? new Dictionary<string, string>(), minimumMinutes);
 
     [Fact]
     public void Lays_down_one_row_per_hour_of_the_window()
@@ -205,5 +206,43 @@ public class WeekGridTests
             Mon.AddHours(15), Mon.AddHours(2), startHour: 8, endHour: 9);
 
         grid.Should().ContainSingle().Which.Date.Should().Be("31-08-26");
+    }
+
+    /// <summary>
+    /// The floor is the user's to set, because the default hides real work on a young ledger:
+    /// three tracked minutes against the five-minute default renders a completely blank row,
+    /// which reads as "nothing was recorded" rather than "below your threshold".
+    /// </summary>
+    [Fact]
+    public void Honours_a_floor_the_caller_lowered()
+    {
+        var rows = new[] { At(Mon, 8, Sheep, "SN-342", 3) };
+
+        Build(rows, Mon, Mon, minimumMinutes: 5)[0].Repo.Should().BeEmpty();
+        Build(rows, Mon, Mon, minimumMinutes: 1)[0].Repo.Should().Be("sheeponline-new");
+        Build(rows, Mon, Mon, minimumMinutes: 1)[0].Tickets.Should().Be("SN-342");
+    }
+
+    // Zero means show everything, including a single stray minute.
+    [Fact]
+    public void Shows_every_minute_when_the_floor_is_zero()
+    {
+        var grid = Build(new[] { At(Mon, 8, Sheep, "SN-1", 1) }, Mon, Mon, minimumMinutes: 0);
+
+        grid[0].Repo.Should().Be("sheeponline-new");
+    }
+
+    // Raising the floor still filters, and still filters the repo and ticket separately.
+    [Fact]
+    public void Honours_a_floor_the_caller_raised()
+    {
+        var grid = Build(new[]
+        {
+            At(Mon, 8, Sheep, "SN-1", 20),
+            At(Mon, 8, Training, "TM-1", 15)
+        }, Mon, Mon, minimumMinutes: 18);
+
+        grid[0].Repo.Should().Be("sheeponline-new");
+        grid[0].Tickets.Should().Be("SN-1");
     }
 }

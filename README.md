@@ -194,9 +194,14 @@ Notes:
 
 - **An hour with no tracked time keeps its row and leaves the cells blank**, so
   the shape of the day survives and gaps stay visible.
-- A repo needs 5 minutes in an hour to appear, and a ticket needs 5 minutes of
-  its own. The floor is deliberately asymmetric: an hour split 4 + 4 across two
-  tickets of one repo still names the repo, because 8 minutes were spent there.
+- **Min. minutes** sets how much an entry must earn in an hour to appear,
+  defaulting to 5 so a one-minute Claude write does not add a whole repo to the
+  cell. Lower it to 0 to see everything — worth doing on a fresh ledger, where
+  5 would hide the only work there is. The floor is deliberately asymmetric: it
+  applies to a repo's hourly total but to each ticket separately, so an hour
+  split 4 + 4 across two tickets of one repo still names the repo, because 8
+  minutes were spent there. When everything falls under the floor the window
+  says so rather than showing a blank sheet.
 - Concurrent work is real — `TimeAggregator` credits every active repo at once,
   so a day can total more than the wall clock.
 - Minutes on a branch carrying no ticket count towards the repo but print no

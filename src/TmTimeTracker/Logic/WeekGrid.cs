@@ -15,15 +15,19 @@ public sealed record GridRow(string Date, string TimeSlot, string Repo, string T
 public static class WeekGrid
 {
     /// <summary>
-    /// Below this an entry is noise rather than work. TimeAggregator credits every active repo
-    /// concurrently, so without a floor a one-minute Claude write would put a whole extra repo in
-    /// the cell.
+    /// Below this an entry is treated as noise rather than work. TimeAggregator credits every
+    /// active repo concurrently, so without a floor a one-minute Claude write would put a whole
+    /// extra repo in the cell.
+    ///
+    /// The caller passes its own value, because the right floor depends on the range: on a ledger
+    /// only minutes old, five would hide the only work there is and the sheet would read as
+    /// "nothing was recorded" rather than "below your threshold". The export window exposes it.
     ///
     /// Applied to the repo's total for the hour but to each ticket separately, deliberately: an
     /// hour split four minutes each across two tickets of one repo is eight minutes in that repo,
     /// so the repo earns its cell even though neither ticket does.
     /// </summary>
-    public const int MinimumMinutes = 5;
+    public const int DefaultMinimumMinutes = 5;
 
     private const string DateFormat = "dd-MM-yy";
     private const char EnDash = '–';
@@ -34,7 +38,8 @@ public static class WeekGrid
         DateTime to,
         int dayStartHour,
         int dayEndHour,
-        IReadOnlyDictionary<string, string> summaries)
+        IReadOnlyDictionary<string, string> summaries,
+        int minimumMinutes = DefaultMinimumMinutes)
     {
         // The pickers hand back a whole DateTime; only the date half selects days.
         var first = from.Date;
@@ -58,29 +63,29 @@ public static class WeekGrid
                 grid.Add(new GridRow(
                     date,
                     $"{hour:00}:00{EnDash}{hour + 1:00}:00",
-                    RenderRepos(inHour),
-                    RenderTickets(inHour, summaries)));
+                    RenderRepos(inHour, minimumMinutes),
+                    RenderTickets(inHour, summaries, minimumMinutes)));
             }
         }
 
         return grid;
     }
 
-    private static string RenderRepos(IReadOnlyList<HourActivityRow>? inHour)
+    private static string RenderRepos(IReadOnlyList<HourActivityRow>? inHour, int minimumMinutes)
     {
         if (inHour is null) return "";
 
         return string.Join(" / ", inHour
             .GroupBy(r => r.RepoPath, StringComparer.OrdinalIgnoreCase)
             .Select(g => new { Name = FolderName(g.Key), Minutes = g.Sum(r => r.Minutes) })
-            .Where(x => x.Minutes >= MinimumMinutes)
+            .Where(x => x.Minutes >= minimumMinutes)
             .OrderByDescending(x => x.Minutes)
             .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .Select(x => x.Name));
     }
 
-    private static string RenderTickets(
-        IReadOnlyList<HourActivityRow>? inHour, IReadOnlyDictionary<string, string> summaries)
+    private static string RenderTickets(IReadOnlyList<HourActivityRow>? inHour,
+        IReadOnlyDictionary<string, string> summaries, int minimumMinutes)
     {
         if (inHour is null) return "";
 
@@ -90,7 +95,7 @@ public static class WeekGrid
             .Where(r => r.TicketKey.Length > 0)
             .GroupBy(r => r.TicketKey, StringComparer.Ordinal)
             .Select(g => new { Key = g.Key, Minutes = g.Sum(r => r.Minutes) })
-            .Where(x => x.Minutes >= MinimumMinutes)
+            .Where(x => x.Minutes >= minimumMinutes)
             .OrderByDescending(x => x.Minutes)
             .ThenBy(x => x.Key, StringComparer.Ordinal)
             .Select(x => summaries.TryGetValue(x.Key, out var s) && !string.IsNullOrWhiteSpace(s)
