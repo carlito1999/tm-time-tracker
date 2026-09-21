@@ -116,7 +116,7 @@ entered into the setup wizard on first run (no `secrets.json` file needed).
       `sqlite3 %LOCALAPPDATA%\TmTimeTracker\state.db "select * from hour_activity;"`
       → rows land in the correct **local** hour with the correct repo path.
 - [ ] Tray → **Export report…** — the window opens with From set to Monday of
-      this week, To set to today, and hours 08–17.
+      this week, To set to today, hours 08–16 and Min. minutes 0.
 - [ ] The preview lists one row per hour, with untracked hours blank and a blank
       spacer row between days.
 - [ ] Change the From date, the To date and the hour spinners — the preview
@@ -126,8 +126,10 @@ entered into the setup wizard on first run (no `secrets.json` file needed).
 - [ ] **Open the file in real Excel** (not only LibreOffice). It must open with
       **no repair prompt**, and keep: bold filled header, tinted Date/Time/Repo
       columns, wrapped Ticket column with several tickets on separate lines.
+- [ ] Move the From or To date → the suggested file name follows it. Type a name
+      of your own, move a date again → your name is kept.
 - [ ] Clear the file name box and export again → the file is named
-      `TmTimeTracker-week-<yyyy-MM-dd>.xlsx`.
+      `Lefteris-<from>-<to>.xlsx`.
 - [ ] Type a name without an extension → `.xlsx` is appended.
 - [ ] Pick a range with no tracked time → the status line reads
       "Nothing in this range" or shows blank rows, and export still writes a

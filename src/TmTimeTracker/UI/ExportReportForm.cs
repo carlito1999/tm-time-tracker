@@ -28,6 +28,10 @@ public sealed class ExportReportForm : Form
     // per control before the form is even visible.
     private bool _loading = true;
 
+    // The last name this window suggested. The box follows the date pickers only while it still
+    // holds that exact text, so moving a date after typing your own name does not overwrite it.
+    private string _suggestedName;
+
     public ExportReportForm(WeeklyReportExporter exporter, ILogger<ExportReportForm> log)
     {
         _exporter = exporter;
@@ -50,10 +54,11 @@ public sealed class ExportReportForm : Form
         // the window rather than a constant the user cannot see.
         _minMinutes = Spinner(WeeklyReportExporter.DefaultMinimumMinutes, max: 60, width: 55);
 
+        _suggestedName = WeeklyReportExporter.SuggestFileName(from, to);
         _fileName = new TextBox
         {
             Width = 280,
-            Text = WeeklyReportExporter.SuggestFileName(from),
+            Text = _suggestedName,
             Margin = new Padding(0, 4, 16, 0)
         };
 
@@ -211,6 +216,7 @@ public sealed class ExportReportForm : Form
 
         try
         {
+            SyncSuggestedName();
             var grid = BuildGrid();
 
             // Dragging a date picker fires this on every step, so the grid is refilled in one
@@ -243,6 +249,19 @@ public sealed class ExportReportForm : Form
             _preview.Rows.Clear();
             _status.Text = "Could not build the preview - see the log.";
         }
+    }
+
+    /// <summary>
+    /// Keeps the suggested name in step with the dates, but yields the moment the user has typed
+    /// anything of their own.
+    /// </summary>
+    private void SyncSuggestedName()
+    {
+        var next = WeeklyReportExporter.SuggestFileName(_from.Value, _to.Value);
+        if (next == _suggestedName) return;
+
+        if (_fileName.Text == _suggestedName) _fileName.Text = next;
+        _suggestedName = next;
     }
 
     private IReadOnlyList<GridRow> BuildGrid() =>

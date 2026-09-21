@@ -15,10 +15,16 @@ namespace TmTimeTracker.Services;
 public sealed class WeeklyReportExporter
 {
     public const int DefaultDayStartHour = 8;
-    public const int DefaultDayEndHour = 17;
+    public const int DefaultDayEndHour = 16;
     public const int DefaultMinimumMinutes = WeekGrid.DefaultMinimumMinutes;
 
     private const string SheetName = "Week Log";
+
+    /// <summary>
+    /// Prefix on a suggested file name. Whoever adapts this tool for their own use changes it
+    /// here; the box in the export window overrides it per report either way.
+    /// </summary>
+    private const string ReportOwner = "Lefteris";
     private static readonly string[] Headers = { "Date", "Time", "Repo", "Ticket" };
 
     private readonly HourActivityRepository _hours;
@@ -47,8 +53,11 @@ public sealed class WeeklyReportExporter
         return (today.AddDays(-sinceMonday), today);
     }
 
-    public static string SuggestFileName(DateTime weekStart) =>
-        $"TmTimeTracker-week-{weekStart:yyyy-MM-dd}.xlsx";
+    /// <summary>
+    /// Both ends of the range, in a sortable date order, so a folder of reports reads at a glance.
+    /// </summary>
+    public static string SuggestFileName(DateTime from, DateTime to) =>
+        $"{ReportOwner}-{from:yyyy-MM-dd}-{to:yyyy-MM-dd}.xlsx";
 
     public IReadOnlyList<GridRow> BuildGrid(DateTime from, DateTime to, int dayStartHour,
         int dayEndHour, int minimumMinutes = DefaultMinimumMinutes)
@@ -76,7 +85,7 @@ public sealed class WeeklyReportExporter
         string directory, string fileName, int minimumMinutes = DefaultMinimumMinutes)
     {
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, CleanFileName(fileName, from));
+        var path = Path.Combine(directory, CleanFileName(fileName, from, to));
         File.WriteAllBytes(path,
             BuildWorkbook(BuildGrid(from, to, dayStartHour, dayEndHour, minimumMinutes)));
         return path;
@@ -86,12 +95,12 @@ public sealed class WeeklyReportExporter
     /// The filename box is free text, so it can arrive blank, without an extension, or carrying
     /// characters Windows will not accept.
     /// </summary>
-    private static string CleanFileName(string fileName, DateTime from)
+    private static string CleanFileName(string fileName, DateTime from, DateTime to)
     {
         var stripped = new string((fileName ?? "")
             .Where(c => !Path.GetInvalidFileNameChars().Contains(c)).ToArray()).Trim();
 
-        if (stripped.Length == 0) return SuggestFileName(from);
+        if (stripped.Length == 0) return SuggestFileName(from, to);
 
         return Path.GetExtension(stripped).Equals(".xlsx", StringComparison.OrdinalIgnoreCase)
             ? stripped

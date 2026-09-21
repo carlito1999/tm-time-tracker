@@ -50,10 +50,14 @@ correct for their own purpose.
 like", which is a local-calendar question. `remember_entry` stores local for the same reason. The
 retention cutoff is therefore computed from `IClock.LocalNow`, not `UtcNow`.
 
-**The 5-minute floor is asymmetric.** Applied to the repo's *total* for the hour but to each ticket
-*individually*. `TimeAggregator` credits every active repo concurrently, so without a floor a
-one-minute Claude write would put an extra repo in the cell; but thresholding both on the ticket
-would blank an hour split 4 + 4 across two tickets of one repo, which looks like a bug.
+**The minute floor defaults to zero and is asymmetric.** It was shipped at five and immediately
+made a working feature look broken: a ledger minutes old held three tracked minutes, which rendered
+a completely blank sheet indistinguishable from nothing having been recorded. `TimeAggregator`
+already gates on idle and real activity before crediting a minute, so a second silent filter on top
+earns little. It is now a dial on the export window, defaulting to zero, and the status line says
+when every row fell under it. Where it does apply it tests the repo's *total* for the hour but each
+ticket *individually*, because thresholding both on the ticket would blank an hour split 4 + 4
+across two tickets of one repo.
 
 **Empty hours keep their row.** Requested explicitly. The shape of the day survives and gaps stay
 visible rather than silently closing up.

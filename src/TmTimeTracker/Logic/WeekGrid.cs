@@ -19,15 +19,17 @@ public static class WeekGrid
     /// active repo concurrently, so without a floor a one-minute Claude write would put a whole
     /// extra repo in the cell.
     ///
-    /// The caller passes its own value, because the right floor depends on the range: on a ledger
-    /// only minutes old, five would hide the only work there is and the sheet would read as
-    /// "nothing was recorded" rather than "below your threshold". The export window exposes it.
+    /// It defaults to zero - print everything tracked - because a silently filtered sheet reads
+    /// as "nothing was recorded" rather than "below your threshold", and pruning a full sheet is
+    /// easier than noticing work missing from a sparse one. TimeAggregator already gates on idle
+    /// and real activity before a minute is credited, so this is a second filter on top of one
+    /// that has done most of the work. The export window exposes it for crowded hours.
     ///
     /// Applied to the repo's total for the hour but to each ticket separately, deliberately: an
     /// hour split four minutes each across two tickets of one repo is eight minutes in that repo,
     /// so the repo earns its cell even though neither ticket does.
     /// </summary>
-    public const int DefaultMinimumMinutes = 5;
+    public const int DefaultMinimumMinutes = 0;
 
     private const string DateFormat = "dd-MM-yy";
     private const char EnDash = '–';

@@ -130,10 +130,44 @@ public class WeeklyReportExporterTests : IDisposable
         to.Should().Be(new DateTime(year, month, day));
     }
 
+    // The name carries both ends of the range, so a folder of reports sorts and reads at a glance.
     [Fact]
-    public void Suggests_a_filename_carrying_the_week_start()
+    public void Suggests_a_filename_carrying_both_ends_of_the_range()
     {
-        WeeklyReportExporter.SuggestFileName(Monday).Should().Be("TmTimeTracker-week-2026-09-21.xlsx");
+        WeeklyReportExporter.SuggestFileName(Monday, Wednesday)
+            .Should().Be("Lefteris-2026-09-21-2026-09-23.xlsx");
+    }
+
+    [Fact]
+    public void Suggests_the_same_date_twice_for_a_single_day()
+    {
+        WeeklyReportExporter.SuggestFileName(Monday, Monday)
+            .Should().Be("Lefteris-2026-09-21-2026-09-21.xlsx");
+    }
+
+    // A working day ending at 16:00 lays down 08:00-09:00 through 15:00-16:00.
+    [Fact]
+    public void Defaults_to_an_eight_to_sixteen_working_day()
+    {
+        WeeklyReportExporter.DefaultDayStartHour.Should().Be(8);
+        WeeklyReportExporter.DefaultDayEndHour.Should().Be(16);
+
+        var (exporter, _, _) = Build();
+        exporter.BuildGrid(Monday, Monday,
+            WeeklyReportExporter.DefaultDayStartHour,
+            WeeklyReportExporter.DefaultDayEndHour).Should().HaveCount(8);
+    }
+
+    // Nothing tracked is hidden unless the user raises the floor themselves.
+    [Fact]
+    public void Prints_every_tracked_minute_by_default()
+    {
+        WeeklyReportExporter.DefaultMinimumMinutes.Should().Be(0);
+
+        var (exporter, hours, _) = Build();
+        hours.CreditMinute(Monday.AddHours(8), Sheep, "SN-1");
+
+        exporter.BuildGrid(Monday, Monday, 8, 9)[0].Repo.Should().Be("sheeponline-new");
     }
 
     [Fact]
@@ -177,8 +211,8 @@ public class WeeklyReportExporterTests : IDisposable
     {
         var (exporter, _, _) = Build();
 
-        var path = exporter.Export(Monday, Monday, 8, 9, _tempDir, "   ");
+        var path = exporter.Export(Monday, Wednesday, 8, 9, _tempDir, "   ");
 
-        Path.GetFileName(path).Should().Be("TmTimeTracker-week-2026-09-21.xlsx");
+        Path.GetFileName(path).Should().Be("Lefteris-2026-09-21-2026-09-23.xlsx");
     }
 }

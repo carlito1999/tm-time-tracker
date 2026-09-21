@@ -123,13 +123,13 @@ public class WeekGridTests
     // TimeAggregator credits every active repo concurrently, so a one-minute Claude blip would
     // otherwise smuggle a whole extra repo into the cell.
     [Fact]
-    public void Drops_a_repo_that_earned_less_than_five_minutes()
+    public void Drops_a_repo_that_earned_less_than_the_floor()
     {
         var grid = Build(new[]
         {
             At(Mon, 8, Sheep, "SN-1", 55),
             At(Mon, 8, Training, "TM-1", 2)
-        }, Mon, Mon);
+        }, Mon, Mon, minimumMinutes: 5);
 
         grid[0].Repo.Should().Be("sheeponline-new");
         grid[0].Tickets.Should().Be("SN-1");
@@ -147,7 +147,7 @@ public class WeekGridTests
         {
             At(Mon, 8, Sheep, "SN-1", 4),
             At(Mon, 8, Sheep, "SN-2", 4)
-        }, Mon, Mon);
+        }, Mon, Mon, minimumMinutes: 5);
 
         grid[0].Repo.Should().Be("sheeponline-new");
         grid[0].Tickets.Should().BeEmpty();
@@ -244,5 +244,16 @@ public class WeekGridTests
 
         grid[0].Repo.Should().Be("sheeponline-new");
         grid[0].Tickets.Should().Be("SN-1");
+    }
+
+    // Nothing tracked is hidden unless the user asks for it: pruning a full sheet is easier than
+    // noticing work missing from a sparse one.
+    [Fact]
+    public void Prints_everything_tracked_by_default()
+    {
+        WeekGrid.DefaultMinimumMinutes.Should().Be(0);
+
+        Build(new[] { At(Mon, 8, Sheep, "SN-1", 1) }, Mon, Mon)[0]
+            .Repo.Should().Be("sheeponline-new");
     }
 }

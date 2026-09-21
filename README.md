@@ -186,22 +186,29 @@ hour-by-hour spreadsheet:
 | `21-09-26` | `10:00–11:00` | `sheeponline-new / training-manager` | two tickets, one per line |
 
 Pick a date range and the hours of the day to lay down (defaults: Monday of this
-week through today, 08:00–17:00), name the file, and check the live preview
+week through today, 08:00–16:00), name the file, and check the live preview
 before writing. Reports land in `Documents\TmTimeTracker\` and Explorer opens
 with the file selected.
+
+The name is suggested as `Lefteris-<from>-<to>.xlsx` with sortable dates, and
+follows the date pickers until you type something of your own.
 
 Notes:
 
 - **An hour with no tracked time keeps its row and leaves the cells blank**, so
   the shape of the day survives and gaps stay visible.
-- **Min. minutes** sets how much an entry must earn in an hour to appear,
-  defaulting to 5 so a one-minute Claude write does not add a whole repo to the
-  cell. Lower it to 0 to see everything — worth doing on a fresh ledger, where
-  5 would hide the only work there is. The floor is deliberately asymmetric: it
-  applies to a repo's hourly total but to each ticket separately, so an hour
-  split 4 + 4 across two tickets of one repo still names the repo, because 8
-  minutes were spent there. When everything falls under the floor the window
-  says so rather than showing a blank sheet.
+- **Min. minutes** sets how much an entry must earn *within one hour* to be
+  printed in that hour's row. It defaults to **0** — print everything tracked —
+  because a silently filtered sheet reads as "nothing was recorded" rather than
+  "below your threshold", and pruning a full sheet beats missing work in a
+  sparse one. Raise it when an hour gets crowded: `TimeAggregator` credits every
+  active repo concurrently, so a one-minute Claude write in another repo earns
+  that repo a minute. The floor is asymmetric — it tests a repo's hourly total
+  but each ticket separately, so an hour split 4 + 4 across two tickets of one
+  repo still names the repo at a floor of 5, because 8 minutes were spent there.
+  Nothing is ever lost: the ledger keeps every minute, so re-exporting at a
+  different floor brings dropped entries straight back. When everything falls
+  under the floor the window says so rather than showing a blank sheet.
 - Concurrent work is real — `TimeAggregator` credits every active repo at once,
   so a day can total more than the wall clock.
 - Minutes on a branch carrying no ticket count towards the repo but print no
