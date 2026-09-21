@@ -58,6 +58,7 @@ public class TicketEstimationWorkerTests
         public required TicketEstimationWorker Worker { get; init; }
         public required TicketEstimateRepository Estimates { get; init; }
         public required RepoProjectRepository Mappings { get; init; }
+        public required RepoEstimationRepository Switches { get; init; }
         public required FakeJira Jira { get; init; }
         public required Mock<IClaudeEstimator> Claude { get; init; }
         public required Mock<IUserNotifier> Notifier { get; init; }
@@ -87,6 +88,7 @@ public class TicketEstimationWorkerTests
         var mappings = new RepoProjectRepository(factory);
         if (mappedProject is not null) mappings.Save(Repo, mappedProject, autoMatched: true);
 
+        var switches = new RepoEstimationRepository(factory);
         var estimates = new TicketEstimateRepository(factory);
         var jira = new FakeJira { AcceptsWrites = jiraAcceptsWrites, StoredSeconds = existingEstimateSeconds };
 
@@ -143,12 +145,13 @@ public class TicketEstimationWorkerTests
         return new Harness
         {
             Worker = new TicketEstimationWorker(repos, mappings,
-                new RepoBranchRepository(factory), estimates, search.Object,
+                new RepoBranchRepository(factory), switches, estimates, search.Object,
                 reader.Object, writer.Object, projectSource.Object, claude.Object,
                 worktrees.Object, fetcher, gitlab.Object, notifier.Object, new FixedClock(),
                 NullLogger<TicketEstimationWorker>.Instance),
             Estimates = estimates,
             Mappings = mappings,
+            Switches = switches,
             Jira = jira,
             Claude = claude,
             Notifier = notifier,
@@ -419,6 +422,50 @@ public class TicketEstimationWorkerTests
             It.IsAny<CancellationToken>()), Times.Never);
         h.Notifier.Verify(n => n.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
             Times.Once);
+    }
+
+    // --- the per-repo switch --------------------------------------------------------------
+
+    [Fact]
+    public async Task Does_not_touch_jira_or_claude_for_a_repo_with_estimation_off()
+    {
+        var h = Build();
+        h.Switches.SetEnabled(Repo, false);
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Jql.Should().BeEmpty();
+        h.Claude.Verify(c => c.RunAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        h.Jira.WriteCount.Should().Be(0);
+    }
+
+    // The user has already told the app to leave this repo alone, so a toast saying it could not
+    // be matched to a Jira project would be noise about something they chose.
+    [Fact]
+    public async Task Does_not_warn_about_an_unmappable_repo_with_estimation_off()
+    {
+        var h = Build(mappedProject: null,
+            projects: new[] { new JiraProject("XX", "Something Unrelated") });
+        h.Switches.SetEnabled(Repo, false);
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Notifier.Verify(n => n.Show(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Resumes_estimating_once_the_repo_is_switched_back_on()
+    {
+        var h = Build();
+        h.Switches.SetEnabled(Repo, false);
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Switches.SetEnabled(Repo, true);
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Done);
     }
 
     // --- infrastructure failures -----------------------------------------------------------

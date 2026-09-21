@@ -32,6 +32,9 @@ public static class HostingExtensions
             // Announcements need this to turn a ticket key into a Bitbucket repository, so it
             // cannot stay behind AddClaudeServices, which the CLI modes deliberately leave out.
             services.AddSingleton<RepoProjectRepository>();
+            // The Repositories tab reads and writes this in every mode, not only when the
+            // estimation worker is registered.
+            services.AddSingleton<RepoEstimationRepository>();
             services.AddSingleton<JiraApiTokenRepository>();
             services.AddSingleton<BitbucketApiTokenRepository>();
             services.AddSingleton<GitLabApiTokenRepository>();

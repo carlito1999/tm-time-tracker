@@ -44,6 +44,7 @@ public sealed class TicketEstimationWorker : BackgroundService
     private readonly TrackedRepoRepository _repos;
     private readonly RepoProjectRepository _mappings;
     private readonly RepoBranchRepository _branches;
+    private readonly RepoEstimationRepository _switches;
     private readonly TicketEstimateRepository _estimates;
     private readonly IJiraSearchSource _search;
     private readonly IJiraIssueSource _issues;
@@ -64,14 +65,14 @@ public sealed class TicketEstimationWorker : BackgroundService
 
     public TicketEstimationWorker(
         TrackedRepoRepository repos, RepoProjectRepository mappings,
-        RepoBranchRepository branches,
+        RepoBranchRepository branches, RepoEstimationRepository switches,
         TicketEstimateRepository estimates, IJiraSearchSource search,
         IJiraIssueSource issues, IJiraEstimateWriter writer, IJiraProjectSource projects,
         IClaudeEstimator claude, IGitWorktreeManager worktrees,
         TicketAttachmentFetcher attachments, IGitLabIssueSource gitlab, IUserNotifier notifier,
         IClock clock, ILogger<TicketEstimationWorker> log)
     {
-        _repos = repos; _mappings = mappings; _branches = branches;
+        _repos = repos; _mappings = mappings; _branches = branches; _switches = switches;
         _estimates = estimates; _search = search;
         _issues = issues; _writer = writer; _projects = projects; _claude = claude;
         _worktrees = worktrees; _attachments = attachments; _gitlab = gitlab;
@@ -113,6 +114,14 @@ public sealed class TicketEstimationWorker : BackgroundService
 
     private async Task SweepRepoAsync(string repoPath, CancellationToken ct)
     {
+        // Ahead of project resolution, so a repo the user switched off never reaches Jira and
+        // never raises an "unmapped" toast about something they chose to leave alone.
+        if (!_switches.IsEnabled(repoPath))
+        {
+            _log.LogDebug("Estimation is off for {Repo}; skipping it", repoPath);
+            return;
+        }
+
         var project = await ResolveProjectAsync(repoPath, ct).ConfigureAwait(false);
         if (project is null) return;
 

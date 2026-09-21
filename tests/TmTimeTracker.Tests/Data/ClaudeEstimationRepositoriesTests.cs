@@ -65,6 +65,77 @@ public class RepoProjectRepositoryTests
     }
 }
 
+public class RepoEstimationRepositoryTests
+{
+    private static RepoEstimationRepository Build()
+    {
+        var factory = SharedSqlite.NewInMemory();
+        new DatabaseInitializer(factory).EnsureCreated();
+        return new RepoEstimationRepository(factory);
+    }
+
+    // Every repo tracked before this switch existed has no row, and must keep estimating.
+    [Fact]
+    public void Treats_a_repo_with_no_row_as_enabled()
+    {
+        Build().IsEnabled(@"C:\projects\training-manager").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Disables_a_repo()
+    {
+        var repo = Build();
+
+        repo.SetEnabled(@"C:\projects\training-manager", false);
+
+        repo.IsEnabled(@"C:\projects\training-manager").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Re_enables_a_disabled_repo()
+    {
+        var repo = Build();
+        repo.SetEnabled(@"C:\repo", false);
+
+        repo.SetEnabled(@"C:\repo", true);
+
+        repo.IsEnabled(@"C:\repo").Should().BeTrue();
+    }
+
+    // The checkbox can fire for a repo that is already in the state it asks for.
+    [Fact]
+    public void Disabling_twice_is_harmless()
+    {
+        var repo = Build();
+        repo.SetEnabled(@"C:\repo", false);
+
+        repo.SetEnabled(@"C:\repo", false);
+
+        repo.IsEnabled(@"C:\repo").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Matches_a_path_regardless_of_case()
+    {
+        var repo = Build();
+        repo.SetEnabled(@"C:\projects\training-manager", false);
+
+        repo.IsEnabled(@"c:\PROJECTS\Training-Manager").Should().BeFalse();
+    }
+
+    // Removing a repo and adding it back should not silently resurrect an old opt-out.
+    [Fact]
+    public void Removing_a_repo_forgets_its_opt_out()
+    {
+        var repo = Build();
+        repo.SetEnabled(@"C:\repo", false);
+
+        repo.Remove(@"C:\repo");
+
+        repo.IsEnabled(@"C:\repo").Should().BeTrue();
+    }
+}
+
 public class ClaudeAuthRepositoryTests
 {
     private sealed class PassthroughProtector : ITokenProtector

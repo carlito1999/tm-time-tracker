@@ -176,3 +176,10 @@ CREATE TABLE IF NOT EXISTS repo_branch (
     repo_path      TEXT PRIMARY KEY COLLATE NOCASE,
     branch_pattern TEXT NOT NULL
 );
+
+-- Repos the user has switched automatic estimation off for. Only opt-outs are stored: a repo
+-- with no row estimates, so every repo tracked before this switch existed keeps its behaviour
+-- without a migration.
+CREATE TABLE IF NOT EXISTS repo_estimation_disabled (
+    repo_path TEXT PRIMARY KEY COLLATE NOCASE
+);
