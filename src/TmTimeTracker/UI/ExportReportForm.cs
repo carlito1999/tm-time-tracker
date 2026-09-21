@@ -19,6 +19,7 @@ public sealed class ExportReportForm : Form
     private readonly DateTimePicker _to;
     private readonly NumericUpDown _startHour;
     private readonly NumericUpDown _endHour;
+    private readonly NumericUpDown _minMinutes;
     private readonly TextBox _fileName;
     private readonly DataGridView _preview;
     private readonly Label _status;
@@ -44,6 +45,10 @@ public sealed class ExportReportForm : Form
         _to = DatePicker(to);
         _startHour = HourPicker(WeeklyReportExporter.DefaultDayStartHour);
         _endHour = HourPicker(WeeklyReportExporter.DefaultDayEndHour);
+
+        // On a young ledger the default floor hides the only work there is, so it is a dial on
+        // the window rather than a constant the user cannot see.
+        _minMinutes = Spinner(WeeklyReportExporter.DefaultMinimumMinutes, max: 60, width: 55);
 
         _fileName = new TextBox
         {
@@ -127,6 +132,8 @@ public sealed class ExportReportForm : Form
         row.Controls.Add(_startHour);
         row.Controls.Add(Caption("to"));
         row.Controls.Add(_endHour);
+        row.Controls.Add(Caption("Min. minutes"));
+        row.Controls.Add(_minMinutes);
         row.Controls.Add(Caption("File name"));
         row.Controls.Add(_fileName);
 
@@ -182,14 +189,16 @@ public sealed class ExportReportForm : Form
         return picker;
     }
 
-    private NumericUpDown HourPicker(int value)
+    private NumericUpDown HourPicker(int value) => Spinner(value, max: 24, width: 55);
+
+    private NumericUpDown Spinner(int value, int max, int width)
     {
         var picker = new NumericUpDown
         {
             Minimum = 0,
-            Maximum = 24,
+            Maximum = max,
             Value = value,
-            Width = 55,
+            Width = width,
             Margin = new Padding(0, 4, 8, 0)
         };
         picker.ValueChanged += (_, _) => RefreshPreview();
@@ -221,7 +230,11 @@ public sealed class ExportReportForm : Form
             var tracked = grid.Count(r => r.Repo.Length > 0);
             _status.Text = grid.Count == 0
                 ? "Nothing in this range - check the dates and the hour window."
-                : $"{grid.Count} rows, {tracked} with tracked time.";
+                : tracked == 0 && _minMinutes.Value > 0
+                    // Distinguishes "nothing was recorded" from "everything is under your floor",
+                    // which otherwise look identical and send people hunting for a bug.
+                    ? $"{grid.Count} rows, none above the {_minMinutes.Value}-minute floor - lower it to see shorter stretches."
+                    : $"{grid.Count} rows, {tracked} with tracked time.";
         }
         catch (Exception ex)
         {
@@ -233,7 +246,8 @@ public sealed class ExportReportForm : Form
     }
 
     private IReadOnlyList<GridRow> BuildGrid() =>
-        _exporter.BuildGrid(_from.Value, _to.Value, (int)_startHour.Value, (int)_endHour.Value);
+        _exporter.BuildGrid(_from.Value, _to.Value, (int)_startHour.Value, (int)_endHour.Value,
+            (int)_minMinutes.Value);
 
     private void Export()
     {
@@ -241,7 +255,7 @@ public sealed class ExportReportForm : Form
         {
             var path = _exporter.Export(
                 _from.Value, _to.Value, (int)_startHour.Value, (int)_endHour.Value,
-                WeeklyReportExporter.DefaultFolder, _fileName.Text);
+                WeeklyReportExporter.DefaultFolder, _fileName.Text, (int)_minMinutes.Value);
 
             _status.Text = $"Written to {path}";
             _log.LogInformation("Weekly report written to {Path}", path);

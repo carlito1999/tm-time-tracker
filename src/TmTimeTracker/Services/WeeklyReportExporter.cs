@@ -16,6 +16,7 @@ public sealed class WeeklyReportExporter
 {
     public const int DefaultDayStartHour = 8;
     public const int DefaultDayEndHour = 17;
+    public const int DefaultMinimumMinutes = WeekGrid.DefaultMinimumMinutes;
 
     private const string SheetName = "Week Log";
     private static readonly string[] Headers = { "Date", "Time", "Repo", "Ticket" };
@@ -49,7 +50,8 @@ public sealed class WeeklyReportExporter
     public static string SuggestFileName(DateTime weekStart) =>
         $"TmTimeTracker-week-{weekStart:yyyy-MM-dd}.xlsx";
 
-    public IReadOnlyList<GridRow> BuildGrid(DateTime from, DateTime to, int dayStartHour, int dayEndHour)
+    public IReadOnlyList<GridRow> BuildGrid(DateTime from, DateTime to, int dayStartHour,
+        int dayEndHour, int minimumMinutes = DefaultMinimumMinutes)
     {
         // The upper bound is exclusive in the ledger, so the last chosen day is included whole.
         var rows = _hours.GetBetween(from.Date, to.Date.AddDays(1));
@@ -60,7 +62,8 @@ public sealed class WeeklyReportExporter
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        return WeekGrid.Build(rows, from, to, dayStartHour, dayEndHour, _summaries.GetMany(keys));
+        return WeekGrid.Build(rows, from, to, dayStartHour, dayEndHour,
+            _summaries.GetMany(keys), minimumMinutes);
     }
 
     public byte[] BuildWorkbook(IReadOnlyList<GridRow> grid) =>
@@ -70,11 +73,12 @@ public sealed class WeeklyReportExporter
 
     /// <summary>Writes the report and returns the full path it landed on.</summary>
     public string Export(DateTime from, DateTime to, int dayStartHour, int dayEndHour,
-        string directory, string fileName)
+        string directory, string fileName, int minimumMinutes = DefaultMinimumMinutes)
     {
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, CleanFileName(fileName, from));
-        File.WriteAllBytes(path, BuildWorkbook(BuildGrid(from, to, dayStartHour, dayEndHour)));
+        File.WriteAllBytes(path,
+            BuildWorkbook(BuildGrid(from, to, dayStartHour, dayEndHour, minimumMinutes)));
         return path;
     }
 
