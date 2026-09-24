@@ -6,7 +6,9 @@ using Serilog;
 using TmTimeTracker;
 using TmTimeTracker.Configuration;
 using TmTimeTracker.Data;
+using TmTimeTracker.Jev;
 using TmTimeTracker.Jira;
+using TmTimeTracker.Logic;
 using TmTimeTracker.Platform;
 using TmTimeTracker.Services;
 using TmTimeTracker.UI;
@@ -41,6 +43,10 @@ if (args.Length == 3 && args[0] == "--set-bitbucket-token")
 // back from the API rather than typed.
 if (args.Length == 2 && args[0] == "--set-gitlab-token")
     { await RunCli(b => b, h => SetGitLabToken(h, args[1])); return; }
+// Offline experiments: asks Jev a question set about many tickets with the stored key. The key
+// stays inside this process - the output carries states and answers, never the credential.
+if (args.Length == 4 && args[0] == "--jev-batch")
+    { await RunCli(b => b.AddClaudeServices(), h => RunJevBatch(h, args[1], args[2], args[3])); return; }
 // The overdue warning cannot fire until the read:dev-info:jira scope is granted, so this is the
 // only way to see a real toast come out of the published exe.
 if (args.Length == 1 && args[0] == "--test-toast")
@@ -356,4 +362,111 @@ static async Task RunStreaming(IHost host)
             Console.WriteLine($"[{evt.AtUtc:HH:mm:ss}] {evt.GetType().Name}: {evt}");
     });
     await host.RunAsync(cts.Token);
+}
+
+// One JSON line per ticket: the state Jev read and its answers. Resumable - a key already in the
+// output is skipped - so a run cut short by a rate limit or a closed laptop picks up where it
+// stopped rather than paying for the same answers twice.
+static async Task RunJevBatch(IHost host, string questionsPath, string keysPath, string outPath)
+{
+    var jev = host.Services.GetRequiredService<IJevClient>();
+    if (!jev.IsConfigured)
+    {
+        Console.Error.WriteLine("No Jev key saved. Add one on the API tokens tab in Settings.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    var questions = JevQuestionSet.Parse(await File.ReadAllTextAsync(questionsPath));
+    var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    if (File.Exists(outPath))
+        foreach (var line in await File.ReadAllLinesAsync(outPath))
+            if (line.Length > 0)
+                done.Add(System.Text.Json.JsonDocument.Parse(line).RootElement.GetProperty("key").GetString()!);
+
+    var todo = (await File.ReadAllLinesAsync(keysPath))
+        .Select(k => k.Trim()).Where(k => k.Length > 0 && !done.Contains(k))
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    var jira = host.Services.GetRequiredService<IJiraSearchSource>();
+    var gitlab = host.Services.GetRequiredService<TmTimeTracker.GitLab.IGitLabIssueSource>();
+    var snake = new System.Text.Json.JsonSerializerOptions
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower
+    };
+
+    await using var writer = new StreamWriter(outPath, append: true);
+    var answered = 0;
+    var cost = 0m;
+
+    foreach (var chunk in todo.Chunk(50))
+    {
+        foreach (var issue in await SearchKeysAsync(jira, chunk))
+        {
+            var linked = new List<LinkedIssue>();
+            foreach (var link in GitLabIssueLink.FindAll(AdfText.Urls(issue.Fields.Description)))
+                if (await gitlab.FetchAsync(link, CancellationToken.None) is { } found) linked.Add(found);
+
+            var state = JevTicketState.Build(
+                issue.Fields.Summary, AdfText.Flatten(issue.Fields.Description),
+                (issue.Fields.Attachments ?? []).Select(a => a.Filename).ToList(), linked);
+
+            JevResult result;
+            try
+            {
+                result = await jev.AskAsync(state, questions, CancellationToken.None);
+            }
+            catch (JevException ex)
+            {
+                Console.Error.WriteLine($"{issue.Key}: {ex.Message}");
+                if (ex.IsAuthFailure) { Environment.ExitCode = 1; return; }
+                continue;
+            }
+
+            var answers = new System.Text.Json.Nodes.JsonObject();
+            foreach (var (id, answer) in result.Answers)
+            {
+                var node = System.Text.Json.JsonSerializer.SerializeToNode(answer, answer.GetType(), snake)!.AsObject();
+                node["type"] = answer.GetType().Name.Replace("Answer", "").ToLowerInvariant();
+                answers[id] = node;
+            }
+
+            await writer.WriteLineAsync(new System.Text.Json.Nodes.JsonObject
+            {
+                ["key"] = issue.Key,
+                ["model"] = result.Model,
+                ["input_tokens"] = result.Usage.InputTokens,
+                ["cost"] = result.Usage.CostUsd,
+                ["state"] = System.Text.Json.JsonSerializer.SerializeToNode(state),
+                ["answers"] = answers
+            }.ToJsonString());
+            await writer.FlushAsync();
+
+            answered++;
+            cost += result.Usage.CostUsd ?? 0;
+        }
+    }
+
+    Console.WriteLine($"Answered {answered} of {todo.Count} tickets ({done.Count} already done). Cost ${cost:0.#####}.");
+}
+
+// A key Jira cannot see - deleted, or in a project this account cannot read - fails the whole
+// `key in (...)` query, so a failed chunk is retried one key at a time and the missing key dropped.
+static async Task<IReadOnlyList<Issue>> SearchKeysAsync(IJiraSearchSource jira, string[] keys)
+{
+    try
+    {
+        return await jira.SearchIssuesAsync($"key in ({string.Join(",", keys)})", CancellationToken.None);
+    }
+    catch (HttpRequestException) when (keys.Length > 1)
+    {
+        var found = new List<Issue>();
+        foreach (var key in keys) found.AddRange(await SearchKeysAsync(jira, [key]));
+        return found;
+    }
+    catch (HttpRequestException ex)
+    {
+        Console.Error.WriteLine($"{keys[0]}: not readable from Jira ({ex.StatusCode}).");
+        return [];
+    }
 }
