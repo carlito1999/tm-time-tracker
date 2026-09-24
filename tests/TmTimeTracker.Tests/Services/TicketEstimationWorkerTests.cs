@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TmTimeTracker.Data;
 using TmTimeTracker.GitLab;
+using TmTimeTracker.Jev;
 using TmTimeTracker.Jira;
 using TmTimeTracker.Logic;
 using TmTimeTracker.Platform;
@@ -64,6 +65,8 @@ public class TicketEstimationWorkerTests
         public required Mock<IUserNotifier> Notifier { get; init; }
         public required Mock<IGitWorktreeManager> Worktrees { get; init; }
         public required Mock<IGitLabIssueSource> GitLab { get; init; }
+        public required Mock<IJevClient> Jev { get; init; }
+        public required JevEstimateRepository JevEstimates { get; init; }
         public required List<string> Prompts { get; init; }
 
         public string LastPrompt => Prompts[^1];
@@ -77,7 +80,8 @@ public class TicketEstimationWorkerTests
         bool jiraAcceptsWrites = true,
         int? existingEstimateSeconds = null,
         IReadOnlyList<JiraProject>? projects = null,
-        JsonElement? description = null)
+        JsonElement? description = null,
+        Mock<IJevClient>? jev = null)
     {
         var factory = SharedSqlite.NewInMemory();
         new DatabaseInitializer(factory).EnsureCreated();
@@ -142,13 +146,21 @@ public class TicketEstimationWorkerTests
         gitlab.Setup(g => g.FetchAsync(It.IsAny<GitLabIssueRef>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync((LinkedIssue?)null);
 
+        // No Jev key unless a test gives one: every test written before Jev existed must still
+        // see Claude's figure reach Jira.
+        jev ??= new Mock<IJevClient>();
+        var jevEstimates = new JevEstimateRepository(factory);
+
         return new Harness
         {
             Worker = new TicketEstimationWorker(repos, mappings,
                 new RepoBranchRepository(factory), switches, estimates, search.Object,
                 reader.Object, writer.Object, projectSource.Object, claude.Object,
                 worktrees.Object, fetcher, gitlab.Object, notifier.Object, new FixedClock(),
-                NullLogger<TicketEstimationWorker>.Instance),
+                NullLogger<TicketEstimationWorker>.Instance,
+                jev.Object, JevEstimator.Default, jevEstimates),
+            Jev = jev,
+            JevEstimates = jevEstimates,
             Estimates = estimates,
             Mappings = mappings,
             Switches = switches,
@@ -176,6 +188,118 @@ public class TicketEstimationWorkerTests
         JsonDocument.Parse(
             "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":["
             + "{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"" + url + "\"}}]}]}").RootElement;
+
+    // --- Jev ---------------------------------------------------------------------------
+
+    /// <summary>A Jev client with a key saved, answering the estimator's question with this.</summary>
+    private static Mock<IJevClient> JevAnswering(ChoiceAnswer answer, List<object>? states = null)
+    {
+        var jev = new Mock<IJevClient>();
+        jev.SetupGet(j => j.IsConfigured).Returns(true);
+        jev.Setup(j => j.AskAsync(It.IsAny<object>(),
+                    It.IsAny<IReadOnlyDictionary<string, JevQuestion>>(), It.IsAny<CancellationToken>()))
+           .Callback<object, IReadOnlyDictionary<string, JevQuestion>, CancellationToken>(
+               (state, _, _) => states?.Add(state))
+           .ReturnsAsync(new JevResult("typesafe/jev-1.13-20260917",
+               new Dictionary<string, JevAnswer> { [JevEstimator.Default.QuestionId] = answer },
+               new JevUsage(900, 20, 0.00004m)));
+        return jev;
+    }
+
+    // Short on purpose: the calibration pulls long answers towards the middle, and a four-hour
+    // answer lands on 150 - exactly Claude's figure in these tests - after rounding.
+    private static readonly ChoiceAnswer HalfHour = new("m30", 0.6,
+        new Dictionary<string, double> { ["m30"] = 0.8, ["m45"] = 0.2 });
+
+    // With a key saved, the figure written is Jev's, calibrated on logged time, not Claude's.
+    [Fact]
+    public async Task With_a_Jev_key_the_calibrated_Jev_estimate_is_what_Jira_receives()
+    {
+        var h = Build(jev: JevAnswering(HalfHour));
+        var expected = EstimateRounding.CeilingToQuarterHour(JevEstimator.Default.Estimate(HalfHour).Minutes);
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        expected.Should().NotBe(150, "the test only proves something if Jev and Claude disagree");
+        h.Jira.StoredSeconds.Should().Be(expected * 60);
+        h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Done);
+    }
+
+    // Jev reads the same ticket text the estimator was fitted on - summary and description -
+    // not the Claude prompt, which carries instructions and commit history the weights never saw.
+    [Fact]
+    public async Task Jev_reads_the_ticket_text_it_was_fitted_on()
+    {
+        var states = new List<object>();
+        var h = Build(jev: JevAnswering(HalfHour, states));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        var state = JsonSerializer.SerializeToElement(states.Single());
+        state.GetProperty("summary").GetString().Should().Be("Add a retry to the poll loop");
+        state.TryGetProperty("key", out _).Should().BeFalse();
+    }
+
+    // Every answer is kept, so the estimator can be refitted from what the daemon has already
+    // asked instead of paying Jev for the same answers again.
+    [Fact]
+    public async Task Keeps_Jev_s_answer_and_prediction_for_refitting()
+    {
+        var h = Build(jev: JevAnswering(HalfHour));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        var row = h.JevEstimates.Find("TM-1")!;
+        row.Model.Should().Be("typesafe/jev-1.13-20260917");
+        row.PredictedMinutes.Should().Be(JevEstimator.Default.Estimate(HalfHour).Minutes);
+        row.AnswerJson.Should().Contain("m30");
+    }
+
+    // Claude's phases are still recorded when Jev's figure is the one written: they are the
+    // comparison that says whether Jev is still earning its place.
+    [Fact]
+    public async Task Claude_s_phases_are_still_recorded_beside_Jev_s_figure()
+    {
+        var h = Build(jev: JevAnswering(HalfHour));
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        var row = h.Estimates.Find("TM-1")!;
+        (row.ImplementationMinutes, row.TestingMinutes, row.ReviewMinutes).Should().Be((90, 30, 20));
+    }
+
+    [Fact]
+    public async Task Without_a_Jev_key_Claude_s_figure_is_written_and_Jev_is_never_asked()
+    {
+        var h = Build();
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Jira.StoredSeconds.Should().Be(150 * 60);
+        h.Jev.Verify(j => j.AskAsync(It.IsAny<object>(),
+            It.IsAny<IReadOnlyDictionary<string, JevQuestion>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // A Jev outage must not cost the ticket its estimate: Claude's figure is already in hand.
+    // It says so once, not on every ticket, so a dead key does not flood the notification centre.
+    [Fact]
+    public async Task When_Jev_fails_Claude_s_figure_is_written_and_the_user_is_told_once()
+    {
+        var jev = new Mock<IJevClient>();
+        jev.SetupGet(j => j.IsConfigured).Returns(true);
+        jev.Setup(j => j.AskAsync(It.IsAny<object>(),
+                    It.IsAny<IReadOnlyDictionary<string, JevQuestion>>(), It.IsAny<CancellationToken>()))
+           .ThrowsAsync(new JevException("OpenRouter answered 401: bad key", 401));
+        var h = Build(jev: jev, issues: new[] { Issue("TM-1"), Issue("TM-2") });
+
+        await h.Worker.RunOnceAsync(CancellationToken.None);
+
+        h.Jira.StoredSeconds.Should().Be(150 * 60);
+        h.Estimates.Find("TM-1")!.Status.Should().Be(EstimateStatus.Done);
+        h.Estimates.Find("TM-2")!.Status.Should().Be(EstimateStatus.Done);
+        h.Notifier.Verify(n => n.Show(It.Is<string>(t => t.Contains("Jev")), It.IsAny<string>(),
+            It.IsAny<bool>()), Times.Once);
+    }
 
     // --- the happy path ------------------------------------------------------------------
 

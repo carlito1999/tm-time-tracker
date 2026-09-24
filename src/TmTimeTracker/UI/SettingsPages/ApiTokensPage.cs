@@ -125,8 +125,9 @@ public sealed class ApiTokensPage : UserControl
 
         _jev = new TokenSection(
             title: "Jev key — optional, for ticket estimation",
-            hint: "Not used by estimation yet. Stored and tested here for the Jev estimation "
-                + "features; with no key saved, estimation works exactly as it does today.",
+            hint: "With a key saved, the estimate written to a ticket's Original Estimate is "
+                + "Jev's, calibrated on your logged time; Claude's figure is kept as the fallback. "
+                + "With no key, estimation uses Claude alone.",
             walkthrough: new[]
             {
                 "OpenRouter:",

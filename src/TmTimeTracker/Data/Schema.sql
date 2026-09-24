@@ -176,6 +176,21 @@ CREATE TABLE IF NOT EXISTS ticket_estimate (
     warned_at      TEXT
 );
 
+-- One row per ticket Jev estimated: its raw answer, the minutes it was turned into, and which
+-- model gave it. A sibling of ticket_estimate rather than new columns on it, because
+-- DatabaseInitializer cannot add a column to an existing table. The answer is kept whole so the
+-- estimator can be refitted from answers already paid for, once the ticket's worklogs are in.
+CREATE TABLE IF NOT EXISTS ticket_estimate_jev (
+    ticket_key        TEXT PRIMARY KEY,
+    model             TEXT NOT NULL,
+    answer_json       TEXT NOT NULL,
+    expected_minutes  REAL NOT NULL,
+    middle_minutes    REAL NOT NULL,
+    confidence        REAL NOT NULL,
+    predicted_minutes INTEGER NOT NULL,
+    estimated_at      TEXT NOT NULL
+);
+
 -- Optional per-repo override for the branch estimates run against. Needed because a repo's
 -- origin/HEAD is not always the branch carrying the code: one tracked repo points origin/HEAD at
 -- a stub while real work lands on rolling dated branches (dev-01-09-2026, dev-31-08-2026, ...).

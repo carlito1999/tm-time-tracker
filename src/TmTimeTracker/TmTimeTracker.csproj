@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Data\Schema.sql" />
+    <EmbeddedResource Include="Jev\jev-estimator.json" LogicalName="TmTimeTracker.Jev.jev-estimator.json" />
     <EmbeddedResource Include="..\..\assets\app.ico" LogicalName="TmTimeTracker.app.ico" />
   </ItemGroup>
 

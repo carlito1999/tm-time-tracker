@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TmTimeTracker.Data;
 using TmTimeTracker.GitLab;
+using TmTimeTracker.Jev;
 using TmTimeTracker.Jira;
 using TmTimeTracker.Logic;
 using TmTimeTracker.Platform;
@@ -21,6 +23,12 @@ namespace TmTimeTracker.Services;
 /// four gates, and only the last of them - reading the issue back from Jira - is evidence.
 /// Jira answers 2xx and silently stores nothing when timetracking is off the edit screen, so a
 /// successful write is not proof of a stored estimate.
+///
+/// With a Jev key saved, the figure written is Jev's rather than Claude's. Measured against the
+/// worklogs of 140 finished tickets, Claude's figure missed by more than a flat median guess
+/// while Jev's, calibrated on those worklogs, missed by 48 minutes to the guess's 56. Claude still
+/// runs: its phases are recorded as the comparison, and its figure is written whenever Jev cannot
+/// answer, so Jev failing never costs a ticket its estimate.
 /// </summary>
 public sealed class TicketEstimationWorker : BackgroundService
 {
@@ -57,6 +65,13 @@ public sealed class TicketEstimationWorker : BackgroundService
     private readonly IUserNotifier _notifier;
     private readonly IClock _clock;
     private readonly ILogger<TicketEstimationWorker> _log;
+    private readonly IJevClient _jev;
+    private readonly JevEstimator _jevEstimator;
+    private readonly JevEstimateRepository _jevEstimates;
+
+    // Once per process: Claude's figure is written regardless, so a broken key is worth one
+    // mention, not one per ticket.
+    private bool _warnedJevFailure;
 
     // Repo-level faults have no ticket row to hold a warned_at flag, so dedupe lives here. A
     // restart re-notifies once about a still-broken repo, which is the right side to err on:
@@ -70,13 +85,15 @@ public sealed class TicketEstimationWorker : BackgroundService
         IJiraIssueSource issues, IJiraEstimateWriter writer, IJiraProjectSource projects,
         IClaudeEstimator claude, IGitWorktreeManager worktrees,
         TicketAttachmentFetcher attachments, IGitLabIssueSource gitlab, IUserNotifier notifier,
-        IClock clock, ILogger<TicketEstimationWorker> log)
+        IClock clock, ILogger<TicketEstimationWorker> log,
+        IJevClient jev, JevEstimator jevEstimator, JevEstimateRepository jevEstimates)
     {
         _repos = repos; _mappings = mappings; _branches = branches; _switches = switches;
         _estimates = estimates; _search = search;
         _issues = issues; _writer = writer; _projects = projects; _claude = claude;
         _worktrees = worktrees; _attachments = attachments; _gitlab = gitlab;
         _notifier = notifier; _clock = clock; _log = log;
+        _jev = jev; _jevEstimator = jevEstimator; _jevEstimates = jevEstimates;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -245,8 +262,63 @@ public sealed class TicketEstimationWorker : BackgroundService
             return;
         }
 
-        await StoreAsync(issue.Key, parse.Value!, rawOutput, ct).ConfigureAwait(false);
+        var jevMinutes = await JevMinutesAsync(issue, linked, ct).ConfigureAwait(false);
+        await StoreAsync(issue.Key, parse.Value!, rawOutput, jevMinutes, ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Jev's calibrated estimate, or null to fall back on Claude's: when no key is saved, and when
+    /// Jev fails for any reason.
+    ///
+    /// Jev reads the ticket's own text, built exactly as it was for the tickets the estimator was
+    /// fitted on - not the Claude prompt, whose instructions and commit history the weights never
+    /// saw.
+    /// </summary>
+    private async Task<int?> JevMinutesAsync(
+        Issue issue, IReadOnlyList<LinkedIssue> linked, CancellationToken ct)
+    {
+        if (!_jev.IsConfigured) return null;
+
+        var state = JevTicketState.Build(
+            issue.Fields.Summary, AdfText.Flatten(issue.Fields.Description),
+            (issue.Fields.Attachments ?? []).Select(a => a.Filename).ToList(), linked);
+
+        try
+        {
+            var result = await _jev.AskAsync(state, _jevEstimator.Questions, ct).ConfigureAwait(false);
+            var answer = result.Choice(_jevEstimator.QuestionId);
+            var estimate = _jevEstimator.Estimate(answer);
+
+            _jevEstimates.Save(issue.Key, result.Model, JsonSerializer.Serialize(answer, AnswerJson),
+                estimate.ExpectedMinutes, estimate.MiddleMinutes, estimate.Confidence,
+                estimate.Minutes, _clock.UtcNow);
+            _log.LogInformation(
+                "Jev estimates {Ticket} at {Minutes} minutes (its average {Expected:0}, middle {Middle:0}, confidence {Confidence:0.00})",
+                issue.Key, estimate.Minutes, estimate.ExpectedMinutes, estimate.MiddleMinutes,
+                estimate.Confidence);
+            return estimate.Minutes;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Jev could not estimate {Ticket}; writing Claude's figure instead", issue.Key);
+            if (!_warnedJevFailure)
+            {
+                _warnedJevFailure = true;
+                _notifier.Show("Jev estimate failed",
+                    $"{issue.Key}: {ex.Message} Claude's estimate was written instead. Shown once "
+                    + "until the app restarts.",
+                    urgent: false);
+            }
+            return null;
+        }
+    }
+
+    // The same shape --jev-batch writes, so tools/jev/fit_estimator.py reads either.
+    private static readonly JsonSerializerOptions AnswerJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
 
     /// <summary>
     /// Reads any GitLab issues the description links to.
@@ -295,11 +367,13 @@ public sealed class TicketEstimationWorker : BackgroundService
     /// hand is perfectly good.
     /// </summary>
     private async Task StoreAsync(string ticketKey, TicketEstimate estimate, string? rawOutput,
-        CancellationToken ct)
+        int? jevMinutes, CancellationToken ct)
     {
-        // Jira gets the rounded figure; ticket_estimate keeps the raw phases, so the
-        // arithmetic behind the number stays auditable. Gate 4 reads back what was written.
-        var raw = estimate.TotalMinutes;
+        // Jira gets the rounded figure; ticket_estimate keeps Claude's raw phases and
+        // ticket_estimate_jev Jev's answer, so the arithmetic behind the number stays auditable
+        // whichever of them produced it. Gate 4 reads back what was written.
+        var raw = jevMinutes ?? estimate.TotalMinutes;
+        var source = jevMinutes is null ? "Claude" : "Jev";
         var minutes = EstimateRounding.CeilingToQuarterHour(raw);
         string? lastError = null;
 
@@ -313,8 +387,8 @@ public sealed class TicketEstimationWorker : BackgroundService
                 {
                     _estimates.MarkDone(ticketKey, estimate, rawOutput, _clock.UtcNow);
                     _log.LogInformation(
-                        "Estimated {Ticket} at {Minutes} minutes (rounded up from {Raw}: {Impl}+{Test}+{Review}), confidence {Confidence}",
-                        ticketKey, minutes, raw, estimate.ImplementationMinutes,
+                        "Estimated {Ticket} at {Minutes} minutes from {Source}'s {Raw}; Claude's phases {Impl}+{Test}+{Review}, confidence {Confidence}",
+                        ticketKey, minutes, source, raw, estimate.ImplementationMinutes,
                         estimate.TestingMinutes, estimate.ReviewMinutes, estimate.Confidence);
                     return;
                 }

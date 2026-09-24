@@ -1,0 +1,40 @@
+{
+  "time": {
+    "type": "choice",
+    "instructions": "How much working time will an experienced developer who already knows this codebase need to finish this ticket, including testing it?",
+    "criteria": {
+      "m15": "15 minutes",
+      "m30": "30 minutes",
+      "m45": "45 minutes",
+      "m60": "1 hour",
+      "m75": "1 hour 15 minutes",
+      "m90": "1 hour 30 minutes",
+      "m105": "1 hour 45 minutes",
+      "m120": "2 hours",
+      "m135": "2 hours 15 minutes",
+      "m150": "2 hours 30 minutes",
+      "m165": "2 hours 45 minutes",
+      "m180": "3 hours",
+      "m195": "3 hours 15 minutes",
+      "m210": "3 hours 30 minutes",
+      "m225": "3 hours 45 minutes",
+      "m240": "4 hours",
+      "m255": "4 hours 15 minutes",
+      "m270": "4 hours 30 minutes",
+      "m285": "4 hours 45 minutes",
+      "m300": "5 hours",
+      "m315": "5 hours 15 minutes",
+      "m330": "5 hours 30 minutes",
+      "m345": "5 hours 45 minutes",
+      "m360": "6 hours",
+      "m375": "6 hours 15 minutes",
+      "m390": "6 hours 30 minutes",
+      "m405": "6 hours 45 minutes",
+      "m420": "7 hours",
+      "m435": "7 hours 15 minutes",
+      "m450": "7 hours 30 minutes",
+      "m465": "7 hours 45 minutes",
+      "m480": "8 hours"
+    }
+  }
+}

@@ -218,6 +218,8 @@ public static class HostingExtensions
                     sp.GetRequiredService<IHttpClientFactory>().CreateClient("jev-api"),
                     sp.GetRequiredService<JevCredentialRepository>(),
                     sp.GetRequiredService<ILogger<TmTimeTracker.Jev.JevApiClient>>()));
+            services.AddSingleton<JevEstimateRepository>();
+            services.AddSingleton(TmTimeTracker.Jev.JevEstimator.Default);
             services.AddHostedService<TicketEstimationWorker>();
         });
         return builder;

@@ -1,0 +1,107 @@
+{
+  "model": "typesafe/jev-1.13-20260917",
+  "question_id": "time",
+  "questions": {
+    "time": {
+      "type": "choice",
+      "instructions": "How much working time will an experienced developer who already knows this codebase need to finish this ticket, including testing it?",
+      "criteria": {
+        "m15": "15 minutes",
+        "m30": "30 minutes",
+        "m45": "45 minutes",
+        "m60": "1 hour",
+        "m75": "1 hour 15 minutes",
+        "m90": "1 hour 30 minutes",
+        "m105": "1 hour 45 minutes",
+        "m120": "2 hours",
+        "m135": "2 hours 15 minutes",
+        "m150": "2 hours 30 minutes",
+        "m165": "2 hours 45 minutes",
+        "m180": "3 hours",
+        "m195": "3 hours 15 minutes",
+        "m210": "3 hours 30 minutes",
+        "m225": "3 hours 45 minutes",
+        "m240": "4 hours",
+        "m255": "4 hours 15 minutes",
+        "m270": "4 hours 30 minutes",
+        "m285": "4 hours 45 minutes",
+        "m300": "5 hours",
+        "m315": "5 hours 15 minutes",
+        "m330": "5 hours 30 minutes",
+        "m345": "5 hours 45 minutes",
+        "m360": "6 hours",
+        "m375": "6 hours 15 minutes",
+        "m390": "6 hours 30 minutes",
+        "m405": "6 hours 45 minutes",
+        "m420": "7 hours",
+        "m435": "7 hours 15 minutes",
+        "m450": "7 hours 30 minutes",
+        "m465": "7 hours 45 minutes",
+        "m480": "8 hours"
+      }
+    }
+  },
+  "features": [
+    "log_expected_minutes",
+    "log_middle_minutes",
+    "confidence"
+  ],
+  "intercept": 1.559205998611981,
+  "coefficients": [
+    0.38423817666416765,
+    0.20850393246127388,
+    0.30121359957370564
+  ],
+  "fitted": {
+    "date": "2026-09-24",
+    "tickets": 140,
+    "models_seen": [
+      "typesafe/jev-1.13-20260917"
+    ],
+    "cv_mae_minutes": 47.7,
+    "median_guess_cv_mae_minutes": 56.0
+  },
+  "check": {
+    "ticket": "SN-233",
+    "answer": {
+      "choice": "m120",
+      "confidence": 0.14,
+      "probabilities": {
+        "m375": 0.01,
+        "m180": 0.13,
+        "m150": 0.05,
+        "m450": 0,
+        "m435": 0,
+        "m420": 0.01,
+        "m300": 0.05,
+        "m105": 0.03,
+        "m165": 0.02,
+        "m45": 0.02,
+        "m120": 0.17,
+        "m405": 0.01,
+        "m225": 0.01,
+        "m240": 0.08,
+        "m30": 0.01,
+        "m210": 0.02,
+        "m315": 0.01,
+        "m195": 0.02,
+        "m90": 0.09,
+        "m360": 0.02,
+        "m345": 0.01,
+        "m390": 0.01,
+        "m330": 0.01,
+        "m60": 0.04,
+        "m465": 0,
+        "m285": 0.01,
+        "m480": 0.01,
+        "m255": 0.02,
+        "m270": 0.02,
+        "m135": 0.04,
+        "m15": 0,
+        "m75": 0.07
+      },
+      "type": "choice"
+    },
+    "minutes": 102.75767286340204
+  }
+}

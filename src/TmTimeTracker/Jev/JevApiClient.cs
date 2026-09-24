@@ -48,16 +48,23 @@ public sealed class JevApiClient : IJevClient
     private readonly ILogger<JevApiClient> _log;
     private readonly string? _baseUrlOverride;
 
+    // Jev is called from inside the estimation sweep, which is serialised: a provider asking for
+    // an hour's pause must not hold every other repo's estimates for that hour. One capped retry,
+    // then the caller falls back.
+    private readonly TimeSpan _maxRetryWait;
+
     public JevApiClient(
         HttpClient http,
         JevCredentialRepository credentials,
         ILogger<JevApiClient> log,
-        string? baseUrlOverride = null)
+        string? baseUrlOverride = null,
+        TimeSpan? maxRetryWait = null)
     {
         _http = http;
         _credentials = credentials;
         _log = log;
         _baseUrlOverride = baseUrlOverride?.TrimEnd('/');
+        _maxRetryWait = maxRetryWait ?? TimeSpan.FromSeconds(10);
     }
 
     public bool IsConfigured => Usable(_credentials.Get()) is not null;
@@ -123,7 +130,8 @@ public sealed class JevApiClient : IJevClient
 
                 if ((status is 429 or 529) && attempt == 1)
                 {
-                    var wait = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(1);
+                    var asked = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(1);
+                    var wait = asked < _maxRetryWait ? asked : _maxRetryWait;
                     _log.LogWarning("Jev answered {Status} via {Provider}; retrying once after {Seconds}s",
                         status, provider.DisplayName, wait.TotalSeconds);
                     await Task.Delay(wait, ct).ConfigureAwait(false);

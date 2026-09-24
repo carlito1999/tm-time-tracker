@@ -292,6 +292,27 @@ public class JevApiClientTests : IDisposable
         _server.LogEntries.Should().HaveCount(2);
     }
 
+    // Jev runs inside the estimation sweep now, so an hour-long Retry-After must not park the
+    // sweep for an hour. The cap is a constructor argument so this test need not sleep at all.
+    [Fact]
+    public async Task A_long_Retry_After_is_capped()
+    {
+        _server.Given(Request.Create().WithPath(Path).UsingPost())
+               .InScenario("slow").WillSetStateTo("retried")
+               .RespondWith(Response.Create().WithStatusCode(429).WithHeader("Retry-After", "3600"));
+        _server.Given(Request.Create().WithPath(Path).UsingPost())
+               .InScenario("slow").WhenStateIs("retried")
+               .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(NoulResponse()));
+        New();
+        var client = new JevApiClient(new HttpClient(), _credentials, NullLogger<JevApiClient>.Instance,
+            baseUrlOverride: _server.Url, maxRetryWait: TimeSpan.Zero);
+
+        var ask = client.AskAsync("x", Refund, CancellationToken.None);
+
+        (await Task.WhenAny(ask, Task.Delay(TimeSpan.FromSeconds(10)))).Should().BeSameAs(ask);
+        (await ask).Noul("refund").Probability.Should().Be(0.98);
+    }
+
     [Fact]
     public async Task A_second_rate_limit_gives_up_with_the_status()
     {
