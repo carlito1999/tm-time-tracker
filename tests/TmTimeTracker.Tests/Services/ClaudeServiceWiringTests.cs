@@ -44,6 +44,7 @@ public class ClaudeServiceWiringTests
     [InlineData(typeof(IJiraSearchSource))]
     [InlineData(typeof(IJiraEstimateWriter))]
     [InlineData(typeof(IJiraProjectSource))]
+    [InlineData(typeof(TmTimeTracker.Jev.IJevClient))]
     public void Every_estimation_seam_resolves(Type seam)
     {
         using var host = BuildHost();

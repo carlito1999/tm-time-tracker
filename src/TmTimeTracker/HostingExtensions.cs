@@ -47,6 +47,7 @@ public static class HostingExtensions
             services.AddSingleton<JiraApiTokenRepository>();
             services.AddSingleton<BitbucketApiTokenRepository>();
             services.AddSingleton<GitLabApiTokenRepository>();
+            services.AddSingleton<JevCredentialRepository>();
             // The balloon is only the fallback now, live once the tray icon attaches; a no-op in
             // the headless CLI modes. Toasts work in every mode, tray icon or not.
             services.AddSingleton<TmTimeTracker.UI.TrayBalloonNotifier>();
@@ -210,6 +211,13 @@ public static class HostingExtensions
                     sp.GetRequiredService<IHttpClientFactory>().CreateClient("gitlab-api"),
                     sp.GetRequiredService<GitLabApiTokenRepository>(),
                     sp.GetRequiredService<ILogger<TmTimeTracker.GitLab.GitLabApiClient>>()));
+            // Here rather than in core for the same reason as IClaudeEstimator: it spends money,
+            // and the settings page that tests a key only exists in daemon mode.
+            services.AddSingleton<TmTimeTracker.Jev.IJevClient>(
+                sp => new TmTimeTracker.Jev.JevApiClient(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("jev-api"),
+                    sp.GetRequiredService<JevCredentialRepository>(),
+                    sp.GetRequiredService<ILogger<TmTimeTracker.Jev.JevApiClient>>()));
             services.AddHostedService<TicketEstimationWorker>();
         });
         return builder;

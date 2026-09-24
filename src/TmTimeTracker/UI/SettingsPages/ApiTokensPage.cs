@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TmTimeTracker.Data;
+using TmTimeTracker.Jev;
 using TmTimeTracker.Services;
 using TmTimeTracker.UI.Theming;
 
@@ -20,6 +21,10 @@ namespace TmTimeTracker.UI.SettingsPages;
 /// GitLab is a third token again, and unrelated: a Personal Access Token carrying read_api, used
 /// to read the issue a ticket links to. It needs no email, because GitLab authenticates with the
 /// token alone.
+///
+/// Jev is a fourth key, for TypeSafe's decision model, and the only one with a choice of issuer:
+/// the same model is sold through OpenRouter and by TypeSafe directly, the keys are not
+/// interchangeable, and the provider picked here decides which endpoint the key is sent to.
 /// </summary>
 public sealed class ApiTokensPage : UserControl
 {
@@ -33,6 +38,8 @@ public sealed class ApiTokensPage : UserControl
     private readonly TokenSection _jira;
     private readonly TokenSection _bitbucket;
     private readonly TokenSection _gitlab;
+    private readonly TokenSection _jev;
+    private readonly ComboBox _jevProvider;
 
     public ApiTokensPage(IServiceProvider sp, ILogger log)
     {
@@ -107,7 +114,36 @@ public sealed class ApiTokensPage : UserControl
             },
             onCreate: OpenGitLabTokenPage);
 
+        _jevProvider = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            DisplayMember = nameof(JevProvider.DisplayName),
+            Width = 200
+        };
+        foreach (var provider in JevProvider.All) _jevProvider.Items.Add(provider);
+        _jevProvider.SelectedIndex = 0;
+
+        _jev = new TokenSection(
+            title: "Jev key — optional, for ticket estimation",
+            hint: "Not used by estimation yet. Stored and tested here for the Jev estimation "
+                + "features; with no key saved, estimation works exactly as it does today.",
+            walkthrough: new[]
+            {
+                "OpenRouter:",
+                "1.  Press \"Create API Key\" on the page that just opened.",
+                "2.  Name it, for example TmTimeTracker. A credit limit is optional.",
+                "3.  Copy the key (it starts sk-or-) and paste it above, then press Save and test.",
+                "",
+                "Jev is billed to your OpenRouter credit, input tokens only - the test call costs "
+                + "a few thousandths of a cent.",
+                "",
+                "TypeSafe (direct): choose it in the list above first; the button then opens "
+                + "console.typesafe.ai/keys instead. A key from one provider is refused by the other."
+            },
+            onCreate: OpenJevKeyPage);
+
         _jira.Save.Click += async (_, _) => await SaveJiraAsync();
+        _jev.Save.Click += async (_, _) => await SaveJevAsync();
         _gitlab.Save.Click += async (_, _) => await SaveGitLabAsync();
         _bitbucket.Save.Click += async (_, _) => await SaveBitbucketAsync();
 
@@ -121,7 +157,23 @@ public sealed class ApiTokensPage : UserControl
         };
         emailRow.Controls.Add(_emailBox);
 
+        var providerRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(16, 4, 16, 0)
+        };
+        providerRow.Controls.Add(_jevProvider);
+
         // Docked children stack in reverse order of addition, so add bottom-up.
+        foreach (var c in _jev.Controls) Controls.Add(c);
+        Controls.Add(providerRow);
+        Controls.Add(MakeHint(
+            "Which service issued your key. Both serve the same model, but each only accepts "
+            + "its own keys."));
+        Controls.Add(MakeHeading("Jev decision model"));
         foreach (var c in _gitlab.Controls) Controls.Add(c);
         Controls.Add(MakeHint(
             "A separate GitLab Personal Access Token, unrelated to the two above and created "
@@ -159,7 +211,65 @@ public sealed class ApiTokensPage : UserControl
         // Deliberately kept out of _emailBox: that field is the Atlassian account address, and
         // this credential carries a GitLab username in its place.
         Describe(_gitlab, _sp.GetRequiredService<GitLabApiTokenRepository>().Get(), "GitLab");
+
+        DescribeJev(_sp.GetRequiredService<JevCredentialRepository>().Get());
     }
+
+    private void DescribeJev(JevCredential? credential)
+    {
+        var provider = JevProvider.FromId(credential?.Provider);
+        if (credential is null || provider is null)
+        {
+            _jev.Status.Text = "No Jev key saved.";
+            _jev.Status.ForeColor = Theme.TextSecondary;
+            return;
+        }
+
+        _jevProvider.SelectedItem = provider;
+        var tail = credential.Token.Length >= 6 ? credential.Token[^6..] : "……";
+        _jev.Status.Text = $"Saved for {provider.DisplayName} (ends …{tail}).";
+        _jev.Status.ForeColor = Theme.TextSecondary;
+    }
+
+    private JevProvider SelectedJevProvider =>
+        _jevProvider.SelectedItem as JevProvider ?? JevProvider.OpenRouter;
+
+    /// <summary>
+    /// Stores the key only after Jev has actually answered with it, so a key saved here is known
+    /// to reach the model - not merely to be accepted by the provider's front door.
+    /// </summary>
+    private async Task SaveJevAsync()
+    {
+        var token = _jev.Token.Text.Trim();
+        if (token.Length == 0) { Fail(_jev, "Paste a key first."); return; }
+
+        var provider = SelectedJevProvider;
+        try
+        {
+            var result = await _sp.GetRequiredService<IJevClient>()
+                .CheckAsync(new JevCredential(provider.Id, token), CancellationToken.None);
+
+            _sp.GetRequiredService<JevCredentialRepository>().Save(provider.Id, token);
+            var cost = result.Usage.CostUsd is { } usd
+                ? $" The test cost ${usd.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)}."
+                : "";
+            Stored(_jev, token, $"Jev answered through {provider.DisplayName} ({result.Model}).{cost}");
+        }
+        catch (JevException ex)
+        {
+            _log.LogWarning("Jev key test via {Provider} failed: {Message}", provider.DisplayName, ex.Message);
+            Fail(_jev, ex.StatusCode switch
+            {
+                401 or 403 => $"{provider.DisplayName} refused that key. Check it was issued by "
+                            + $"{provider.DisplayName} - a key from the other provider is refused.",
+                402 => $"{provider.DisplayName} accepted the key but the account has no credit left.",
+                _ => ex.Message
+            });
+        }
+    }
+
+    private void OpenJevKeyPage() =>
+        OpenUrl(SelectedJevProvider.KeyPageUrl, SelectedJevProvider.DisplayName);
 
     private static void Describe(TokenSection section, AtlassianCredential? credential, string which)
     {

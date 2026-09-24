@@ -147,6 +147,15 @@ CREATE TABLE IF NOT EXISTS claude_auth (
     token_dpapi BLOB NOT NULL
 );
 
+-- Key for Jev, TypeSafe's System One model, reached either through OpenRouter or directly. Both
+-- take the same request body, so provider only picks the endpoint and the model id. It is a
+-- column now, not later, because DatabaseInitializer cannot add one to an existing table.
+CREATE TABLE IF NOT EXISTS jev_credential (
+    id          INTEGER PRIMARY KEY CHECK(id = 1),
+    provider    TEXT NOT NULL,
+    token_dpapi BLOB NOT NULL
+);
+
 -- One row per ticket ever considered for estimation. Durable rather than in-memory because the
 -- 5-minute sweep would otherwise re-estimate everything after a restart, and because the
 -- attempt cap and the notify-once flag both have to survive one.
